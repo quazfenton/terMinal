@@ -89,33 +89,12 @@ ipcMain.handle('change-directory', async (event, newPath) => {
   return await commandExecutor.executeCommand(`cd ${newPath}`);
 });
 
-// IPC Handlers for File Operations
-ipcMain.handle('read-file', async (event, filePath) => {
-  try {
-    const content = await fs.readFile(filePath, 'utf8');
-    return { success: true, content };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('write-file', async (event, filePath, content) => {
-  try {
-    // Create directory if it doesn't exist
-    const directory = path.dirname(filePath);
-    await fs.mkdir(directory, { recursive: true });
-    
-    // Write the file
-    await fs.writeFile(filePath, content, 'utf8');
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
 // IPC Handlers for AI Processing
 ipcMain.handle('process-ai-query', async (event, query, options = {}) => {
   try {
+    if (options.modelName) {
+      aiService.modelName = options.modelName;
+    }
     return await aiService.processQuery(query, options);
   } catch (error) {
     console.error('Error processing AI query:', error);

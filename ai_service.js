@@ -17,7 +17,7 @@ class AIService {
   constructor(config = {}) {
     this.apiKey = config.apiKey || process.env.CLAUDE_API_KEY;
     this.modelName = config.modelName || 'claude-3-sonnet-20240229';
-    this.apiEndpoint = config.apiEndpoint || 'https://api.anthropic.com/v1/messages';
+    this.apiEndpoint = 'https://api.anthropic.com/v1/messages';
     this.maxTokens = config.maxTokens || 1024;
     this.temperature = config.temperature || 0.7;
     this.systemPrompt = this.buildSystemPrompt();
@@ -267,41 +267,83 @@ Remember to respond with properly formatted JSON containing command sequences as
    */
   async callAI(systemPrompt, userMessage) {
     try {
-      // This is a placeholder for the actual API call
-      // In a real implementation, you would use the appropriate API client
-      
-      const response = await axios.post(
-        this.apiEndpoint,
-        {
-          model: this.modelName,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...this.conversationContext.map(item => ({ role: item.role, content: item.content })),
-            { role: 'user', content: userMessage }
-          ],
-          max_tokens: this.maxTokens,
-          temperature: this.temperature
-        },
-        {
+      let requestConfig;
+      if (this.modelName.startsWith('claude')) {
+        if (!this.apiKey) throw new Error('Claude API key is not set.');
+        this.apiEndpoint = 'https://api.anthropic.com/v1/messages';
+        requestConfig = {
+          url: this.apiEndpoint,
+          method: 'post',
+          data: {
+            model: this.modelName,
+            messages: [{ role: 'user', content: userMessage }],
+            system: systemPrompt,
+            max_tokens: this.maxTokens,
+          },
           headers: {
-            'Content-Type': 'application/json',
             'x-api-key': this.apiKey,
-            'anthropic-version': '2023-06-01'
-          }
-        }
-      );
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json',
+          },
+        };
+      } else if (this.modelName.startsWith('gpt')) {
+        if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key is not set.');
+        this.apiEndpoint = 'https://api.openai.com/v1/chat/completions';
+        requestConfig = {
+          url: this.apiEndpoint,
+          method: 'post',
+          data: {
+            model: this.modelName,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+          },
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        };
+      } else if (this.modelName.startsWith('gemini')) {
+        if (!process.env.GEMINI_API_KEY) throw new Error('Gemini API key is not set.');
+        this.apiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent`;
+        requestConfig = {
+          url: this.apiEndpoint,
+          method: 'post',
+          data: {
+            contents: [{ parts: [{ text: `${systemPrompt}\n${userMessage}` }] }],
+          },
+          headers: {
+            'x-goog-api-key': process.env.GEMINI_API_KEY,
+            'Content-Type': 'application/json',
+          },
+        };
+      } else {
+        throw new Error(`Unsupported model: ${this.modelName}`);
+      }
 
-      // Extract the content from the response
-      return {
-        content: response.data.content[0].text
-      };
+      const response = await axios(requestConfig);
+
+      if (this.modelName.startsWith('claude')) {
+        if (!response.data.content || response.data.content.length === 0) {
+          throw new Error('Empty response from Claude API.');
+        }
+        return { content: response.data.content[0].text };
+      } else if (this.modelName.startsWith('gpt')) {
+        if (!response.data.choices || response.data.choices.length === 0 || !response.data.choices[0].message) {
+          throw new Error('Empty response from OpenAI API.');
+        }
+        return { content: response.data.choices[0].message.content };
+      } else if (this.modelName.startsWith('gemini')) {
+        if (!response.data.candidates || response.data.candidates.length === 0 || !response.data.candidates[0].content || !response.data.candidates[0].content.parts || response.data.candidates[0].content.parts.length === 0) {
+          throw new Error('Empty response from Gemini API.');
+        }
+        return { content: response.data.candidates[0].content.parts[0].text };
+      }
     } catch (error) {
       console.error('Error calling AI API:', error);
-      
-      // For development/testing, return a mock response if API call fails
-      return {
-        content: this.getMockResponse(userMessage)
-      };
+      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+      throw new Error(`AI API Error: ${errorMessage}`);
     }
   }
 

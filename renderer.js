@@ -37,6 +37,15 @@ async function initializeApp() {
   const statusIndicator = document.getElementById('statusIndicator');
   const aiModelInfo = document.getElementById('aiModelInfo');
   const backgroundButton = document.getElementById('backgroundButton');
+  const appearanceButton = document.getElementById('appearanceButton');
+  const aiProviderSelect = document.getElementById('ai-provider-select');
+  const modal = document.getElementById('appearanceModal');
+  const closeButton = document.querySelector('.close-button');
+  const themeSelect = document.getElementById('theme-select');
+  const fontSelect = document.getElementById('font-select');
+  
+  // Load saved settings
+  loadAppearanceSettings();
   
   // Get current directory
   currentDirectory = await window.electronAPI.getCurrentDirectory();
@@ -128,6 +137,38 @@ function setupEventListeners() {
     if (imagePath) {
       setBackgroundImage(imagePath);
     }
+  });
+
+  // Appearance modal listeners
+  appearanceButton.addEventListener('click', () => {
+    modal.style.display = 'block';
+  });
+
+  closeButton.addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+
+  window.addEventListener('click', (event) => {
+    if (event.target == modal) {
+      modal.style.display = 'none';
+    }
+  });
+
+  themeSelect.addEventListener('change', (event) => {
+    applyTheme(event.target.value);
+  }); // Added missing comma here
+
+  fontSelect.addEventListener('change', (event) => {
+    document.body.style.fontFamily = event.target.value;
+    localStorage.setItem('terminalFont', event.target.value);
+  });
+
+  aiProviderSelect.addEventListener('change', (event) => {
+    const selectedProvider = event.target.value;
+    aiModelInfo.textContent = `${event.target.options[event.target.selectedIndex].text} Connected`;
+    localStorage.setItem('aiProvider', selectedProvider);
+    // Note: The main process needs to be updated to actually use this setting.
+    // For now, we're just updating the UI.
   });
   
   // Command queue click delegation
@@ -250,10 +291,12 @@ async function processWithAI(userInput) {
   const thinkingIndicator = addThinkingIndicator();
   
   try {
+    const selectedProvider = document.getElementById('ai-provider-select').value;
     // Send to AI service
     const response = await window.electronAPI.processAIQuery(userInput, {
       biModalMode,
-      includeDirectoryContext: true
+      includeDirectoryContext: true,
+      modelName: selectedProvider
     });
     
     // Remove thinking indicator
@@ -636,6 +679,46 @@ function setBackgroundImage(imagePath) {
   const backgroundOverlay = document.getElementById('backgroundOverlay');
   backgroundOverlay.style.backgroundImage = `url('${imagePath}')`;
   backgroundOverlay.classList.add('active');
+  localStorage.setItem('backgroundImage', imagePath);
+}
+
+/**
+ * Apply a theme to the application
+ * @param {string} themeName - The name of the theme to apply
+ */
+function applyTheme(themeName) {
+  const body = document.body;
+  body.className = `theme-${themeName}`;
+  localStorage.setItem('terminalTheme', themeName);
+}
+
+/**
+ * Load appearance settings from localStorage
+ */
+function loadAppearanceSettings() {
+  const savedTheme = localStorage.getItem('terminalTheme');
+  if (savedTheme) {
+    applyTheme(savedTheme);
+    document.getElementById('theme-select').value = savedTheme;
+  }
+
+  const savedFont = localStorage.getItem('terminalFont');
+  if (savedFont) {
+    document.body.style.fontFamily = savedFont;
+    document.getElementById('font-select').value = savedFont;
+  }
+
+  const savedBackgroundImage = localStorage.getItem('backgroundImage');
+  if (savedBackgroundImage) {
+    setBackgroundImage(savedBackgroundImage);
+  }
+
+  const savedAiProvider = localStorage.getItem('aiProvider');
+  if (savedAiProvider) {
+    const providerSelect = document.getElementById('ai-provider-select');
+    providerSelect.value = savedAiProvider;
+    document.getElementById('aiModelInfo').textContent = `${providerSelect.options[providerSelect.selectedIndex].text} Connected`;
+  }
 }
 
 // Export functions for preload script

@@ -12,8 +12,12 @@ const os = require('os');
 const util = require('util');
 const execPromise = util.promisify(exec);
 
+const PluginManager = require('./plugin_manager');
+
 class CommandExecutor {
   constructor() {
+    this.pluginManager = new PluginManager(this);
+    this.pluginManager.loadPlugins();
     this.currentProcess = null;
     this.isExecuting = false;
     this.commandHistory = [];
@@ -42,6 +46,12 @@ class CommandExecutor {
     try {
       this.isExecuting = true;
       
+      // Check for plugin commands first
+      const pluginInfo = this.pluginManager.findPluginForCommand(command);
+      if (pluginInfo) {
+        return await this.pluginManager.executePluginCommand(pluginInfo);
+      }
+
       // Check for built-in commands
       if (command.startsWith('cd ')) {
         return await this.handleChangeDirectory(command);

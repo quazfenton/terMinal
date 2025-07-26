@@ -15,8 +15,7 @@
             font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace;
             background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
             color: #e0e0e0;
-            height: 100vh;
-            overflow: hidden;
+            min-height: 100vh;
         }
 
         .background-overlay {
@@ -478,6 +477,46 @@
             gap: 10px;
             margin-top: 15px;
         }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+
+        .modal-content {
+            background-color: #1a1a1e;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+            border-radius: 10px;
+        }
+
+        .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .close-button:hover,
+        .close-button:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .setting {
+            margin-bottom: 15px;
+        }
         
         .file-content-indicator {
             display: flex;
@@ -492,6 +531,39 @@
             height: 8px;
             background: #00ff88;
             border-radius: 50%;
+        }
+
+        /* Solarized Theme */
+        .theme-solarized {
+            background: #002b36;
+            color: #839496;
+        }
+        .theme-solarized .main-container, .theme-solarized .title-bar {
+            background: #073642;
+        }
+        .theme-solarized .terminal-prompt {
+            color: #268bd2;
+        }
+        .theme-solarized .ai-model-info, .theme-solarized .status-indicator {
+            color: #2aa198;
+        }
+
+        /* Retro Theme */
+        .theme-retro {
+            background: #000000;
+            color: #00ff00;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .theme-retro .main-container, .theme-retro .title-bar {
+            background: #000000;
+            border-color: #00ff00;
+        }
+        .theme-retro .terminal-prompt, .theme-retro .ai-model-info, .theme-retro .status-indicator {
+            color: #00ff00;
+        }
+        .theme-retro .btn, .theme-retro .toggle-switch {
+            border-color: #00ff00;
+            color: #00ff00;
         }
     </style>
 </head>
@@ -514,6 +586,11 @@
             <div class="ai-status">
                 <div class="status-indicator" id="statusIndicator"></div>
                 <div class="ai-model-info" id="aiModelInfo">Claude Sonnet 4 Connected</div>
+                <select id="ai-provider-select">
+                    <option value="claude-3-sonnet-20240229">Claude Sonnet</option>
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gemini-pro">Gemini Pro</option>
+                </select>
             </div>
             <div class="controls">
                 <div class="control-group">
@@ -528,7 +605,7 @@
                     </div>
                     <div class="control-label">Bi-Modal</div>
                 </div>
-                <button class="btn" id="backgroundButton">Background</button>
+                <button class="btn" id="appearanceButton">Appearance</button>
                 <button class="btn" id="clearButton">Clear</button>
             </div>
         </div>
@@ -551,6 +628,32 @@
                         <button class="send-btn" id="sendButton">Send</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="appearanceModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Appearance Settings</h2>
+            <div class="setting">
+                <label for="theme-select">Theme:</label>
+                <select id="theme-select">
+                    <option value="default">Default</option>
+                    <option value="solarized">Solarized</option>
+                    <option value="retro">Retro</option>
+                </select>
+            </div>
+            <div class="setting">
+                <label for="font-select">Font:</label>
+                <select id="font-select">
+                    <option value="'SF Mono', 'Monaco', 'Cascadia Code', 'Consolas', monospace">Default</option>
+                    <option value="'Courier New', Courier, monospace">Courier New</option>
+                    <option value="'Lucida Console', Monaco, monospace">Lucida Console</option>
+                </select>
+            </div>
+            <div class="setting">
+                <button class="btn" id="backgroundButton">Set Background Image</button>
             </div>
         </div>
     </div>
