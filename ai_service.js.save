@@ -1,6 +1,6 @@
 /**
  * AI Service
- *
+ * 
  * Handles communication with the AI model and constructs prompts
  * with the appropriate schema and constraints.
  */
@@ -14,11 +14,10 @@ const fs = require('fs').promises;
 const path = require('path');
 
 class AIService {
-  constructor(config) {
-    config = config || {};
+  constructor(config = {}) {
     this.apiKey = config.apiKey || process.env.CLAUDE_API_KEY;
-    this.modelName = config.modelName || 'claude-3-sonnet-20240229';
-    this.apiEndpoint = 'https://api.anthropic.com/v1/messages';
+    this.modelName = config.modelName || 'gemini/gemini-2.5-pro';
+    this.apiEndpoint = 'https://api.gemini.com/v1/';
     this.maxTokens = config.maxTokens || 1024;
     this.temperature = config.temperature || 0.7;
     this.systemPrompt = this.buildSystemPrompt();
@@ -203,47 +202,6 @@ The system will handle opening the appropriate editor and inserting the content.
       console.warn('Could not get directory contents:', error);
       return '';
     }
-    }
-    
-    /**
-     * Detect project environment based on directory contents
-     * @param {string} currentDir - Current directory path
-     * @returns {Promise<string>} Detected project type
-     */
-    async detectProjectEnvironment(currentDir) {
-      try {
-        // Check for common project indicators
-        const files = await fs.readdir(currentDir);
-        
-        if (files.includes('package.json')) return 'Node.js';
-        if (files.includes('requirements.txt') || files.includes('Pipfile')) return 'Python';
-        if (files.includes('pom.xml')) return 'Java';
-        if (files.includes('build.gradle')) return 'Gradle';
-        if (files.includes('Cargo.toml')) return 'Rust';
-        if (files.includes('go.mod')) return 'Go';
-        if (files.includes('Gemfile')) return 'Ruby';
-        if (files.includes('composer.json')) return 'PHP';
-        if (files.includes('Dockerfile')) return 'Docker';
-        
-        // Check for specific files in the directory
-        if (files.some(f => f.endsWith('.csproj'))) return 'C#';
-        if (files.some(f => f.endsWith('.sln'))) return 'C#';
-        
-        // Check for directories
-        const stats = await Promise.all(files.map(async file => {
-          const filePath = path.join(currentDir, file);
-          return { name: file, isDirectory: (await fs.stat(filePath)).isDirectory() };
-        }));
-        
-        if (stats.some(stat => stat.isDirectory && stat.name === 'src')) return 'Generic (with src directory)';
-        if (stats.some(stat => stat.isDirectory && stat.name === 'lib')) return 'Generic (with lib directory)';
-        
-        return 'Unknown';
-      } catch (error) {
-        console.error('Error detecting project environment:', error);
-        return 'Unknown';
-      }
-    }
   }
 
   /**
@@ -252,23 +210,19 @@ The system will handle opening the appropriate editor and inserting the content.
    * @param {Object} options - Processing options
    * @returns {Promise<Object>} The AI response with command sequences
    */
-  async processQuery(userQuery, options) {
+  async processQuery(userQuery, options = {}) {
     try {
-      options = options || {};
       const systemInfo = await this.getSystemInfo();
-      const dirContext = options.includeDirectoryContext
+      const dirContext = options.includeDirectoryContext 
         ? await this.getDirectoryContext(systemInfo.currentDirectory)
         : '';
-      
-      // Detect project environment
-      const projectType = await this.detectProjectEnvironment(systemInfo.currentDirectory);
       
       // Update conversation context
       this.updateConversationContext(userQuery);
       
       // Select the appropriate system prompt based on mode
-      const systemPrompt = options.biModalMode
-        ? this.biModalSystemPrompt
+      const systemPrompt = options.biModalMode 
+        ? this.biModalSystemPrompt 
         : this.systemPrompt;
       
       // Build the user message with context
@@ -279,7 +233,6 @@ CURRENT CONTEXT:
 - OS: ${systemInfo.type} (${systemInfo.platform} ${systemInfo.release})
 - Shell: ${systemInfo.shell}
 - Current Directory: ${systemInfo.currentDirectory}
-- Project Type: ${projectType}
 ${dirContext ? `\n${dirContext}` : ''}
 
 Remember to respond with properly formatted JSON containing command sequences as specified.`;
@@ -473,8 +426,7 @@ Remember to respond with properly formatted JSON containing command sequences as
    * @param {string} content - The message content
    * @param {string} role - The role (user or assistant)
    */
-  updateConversationContext(content, role) {
-    role = role || 'user';
+  updateConversationContext(content, role = 'user') {
     // Add the new message
     this.conversationContext.push({ role, content });
     

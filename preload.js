@@ -43,5 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   killCurrentProcess: () => ipcRenderer.invoke('kill-current-process'),
   
   // File system operations
-  getFileSystemInfo: () => ipcRenderer.invoke('get-file-system-info')
+  getFileSystemInfo: () => ipcRenderer.invoke('get-file-system-info'),
+  
+  // Automation channels
+  onAutomationUpdate: (callback) => ipcRenderer.on('automation-update', callback),
+  onAutomationNext: (callback) => ipcRenderer.on('automation-next', callback)
 });

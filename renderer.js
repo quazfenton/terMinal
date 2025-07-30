@@ -54,11 +54,52 @@ async function initializeApp() {
   // Set up event listeners
   setupEventListeners();
   
+  // Set up automation listeners
+  setupAutomationListeners();
+  
   // Focus the input
   commandInput.focus();
   
   // Display welcome message
   displayWelcomeMessage();
+}
+
+/**
+ * Set up automation event listeners
+ */
+function setupAutomationListeners() {
+  window.electronAPI.onAutomationUpdate((event, data) => {
+    const { sequence, result } = data;
+    updateAutomationStatus(sequence, result);
+  });
+
+  window.electronAPI.onAutomationNext((event, sequence) => {
+    displayNextAutomationSequence(sequence);
+  });
+}
+
+/**
+ * Update UI with automation status
+ * @param {Object} sequence - The automation sequence
+ * @param {Array} result - Execution results
+ */
+function updateAutomationStatus(sequence, result) {
+  const statusText = sequence.status === 'completed' 
+    ? 'Automation completed successfully' 
+    : `Automation failed: ${result.find(r => !r.success)?.error || 'Unknown error'}`;
+  
+  addTerminalLine(statusText, sequence.status === 'completed' ? 'system' : 'error');
+  highlightExecutedSequence(sequence.id);
+}
+
+/**
+ * Display the next automation sequence
+ * @param {Object} sequence - The next sequence to display
+ */
+function displayNextAutomationSequence(sequence) {
+  addTerminalLine(`Next automation task: ${sequence.description}`, 'system');
+  renderCommandQueue([sequence]);
+  startAutoAcceptCountdown(sequence.id);
 }
 
 /**
@@ -68,8 +109,8 @@ function displayWelcomeMessage() {
   const welcomeMessage = `
 Welcome to AI Terminal!
 
-This advanced terminal integrates with Claude AI to provide intelligent command suggestions.
-Type your request in natural language, and AI will generate ranked command sequences.
+This advanced terminal integrates with Claude AI to provide intelligent command suggestions and automation.
+Type your request in natural language, and AI will generate ranked command sequences or automate tasks.
 
 Tips:
 - Toggle Auto-Accept to automatically execute top-ranked commands after 15 seconds
@@ -77,6 +118,7 @@ Tips:
 - Start a command with ! to bypass AI and execute directly
 - Press Ctrl+K to clear the terminal
 - Press Esc to clear the input field
+- Automation features include package installation, file creation, and code generation
 
 Type your request below to get started...
 `;
@@ -156,7 +198,7 @@ function setupEventListeners() {
 
   themeSelect.addEventListener('change', (event) => {
     applyTheme(event.target.value);
-  }); // Added missing comma here
+  });
 
   fontSelect.addEventListener('change', (event) => {
     document.body.style.fontFamily = event.target.value;
@@ -167,8 +209,6 @@ function setupEventListeners() {
     const selectedProvider = event.target.value;
     aiModelInfo.textContent = `${event.target.options[event.target.selectedIndex].text} Connected`;
     localStorage.setItem('aiProvider', selectedProvider);
-    // Note: The main process needs to be updated to actually use this setting.
-    // For now, we're just updating the UI.
   });
   
   // Command queue click delegation
@@ -241,8 +281,8 @@ async function processUserInput() {
     return;
   }
   
-  // Process with AI
-  await processWithAI(userInput);
+  // Process with automation engine
+  await processWithAutomation(userInput);
 }
 
 /**
@@ -280,10 +320,10 @@ async function executeDirectCommand(command) {
 }
 
 /**
- * Process user input with AI
+ * Process user input with automation engine
  * @param {string} userInput - The user's input
  */
-async function processWithAI(userInput) {
+async function processWithAutomation(userInput) {
   isProcessing = true;
   updateUIState();
   
@@ -292,7 +332,7 @@ async function processWithAI(userInput) {
   
   try {
     const selectedProvider = document.getElementById('ai-provider-select').value;
-    // Send to AI service
+    // Send to automation engine
     const response = await window.electronAPI.processAIQuery(userInput, {
       biModalMode,
       includeDirectoryContext: true,
@@ -303,19 +343,8 @@ async function processWithAI(userInput) {
     thinkingIndicator.remove();
     
     if (response.success) {
-      // Parse the AI response
-      const parsedResponse = await window.electronAPI.parseAIResponse(
-        response.rawResponse, 
-        biModalMode
-      );
-      
-      // Display explanation if available
-      if (parsedResponse.explanation) {
-        addModelResponse(parsedResponse.explanation);
-      }
-      
       // Update command sequences
-      commandSequences = parsedResponse.commandSequences || [];
+      commandSequences = response.commandSequences || [];
       
       // Render command queue
       renderCommandQueue(commandSequences);
@@ -325,7 +354,7 @@ async function processWithAI(userInput) {
         startAutoAcceptCountdown(commandSequences[0].id);
       }
     } else {
-      addTerminalLine(`AI Error: ${response.error}`, 'error');
+      addTerminalLine(`Automation Error: ${response.error}`, 'error');
     }
   } catch (error) {
     addTerminalLine(`Error: ${error.message}`, 'error');
@@ -624,6 +653,15 @@ function renderCommandQueue(sequences) {
       item.appendChild(fileIndicator);
     }
     
+    // Add automation status
+    if (sequence.status) {
+      const status = document.createElement('div');
+      status.className = 'automation-status';
+      status.textContent = `Status: ${sequence.status}`;
+      status.style.color = sequence.status === 'completed' ? '#00ff88' : '#ff5555';
+      item.appendChild(status);
+    }
+    
     commandQueue.appendChild(item);
   });
 }
@@ -726,7 +764,7 @@ window.terminalUI = {
   addTerminalLine,
   renderCommandQueue,
   executeCommandSequence,
-  processWithAI,
+  processWithAutomation,
   setBackgroundImage,
   updateUIState
 };

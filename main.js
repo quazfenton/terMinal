@@ -13,6 +13,9 @@ const os = require('os');
 const AIService = require('./ai_service');
 const AIResponseParser = require('./ai_response_parser');
 const CommandExecutor = require('./command_executor');
+const AutomationEngine = require('./automation_engine');
+const PluginManager = require('./plugin_manager');
+const NoteManager = require('./note_manager');
 
 // Initialize services
 const aiService = new AIService({
@@ -21,6 +24,15 @@ const aiService = new AIService({
 });
 const responseParser = new AIResponseParser();
 const commandExecutor = new CommandExecutor();
+const noteManager = new NoteManager();
+const pluginManager = new PluginManager(commandExecutor);
+const automationEngine = new AutomationEngine(aiService, commandExecutor);
+
+// Load plugins
+pluginManager.loadPlugins();
+
+// Add note manager to terminal context
+global.noteManager = noteManager;
 
 let mainWindow;
 
@@ -55,6 +67,12 @@ function createWindow() {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
+
+  // Initialize automation engine
+  automationEngine.initialize();
+  
+  // Store main window reference for automation engine
+  global.mainWindow = mainWindow;
 }
 
 app.whenReady().then(createWindow);
@@ -95,7 +113,7 @@ ipcMain.handle('process-ai-query', async (event, query, options = {}) => {
     if (options.modelName) {
       aiService.modelName = options.modelName;
     }
-    return await aiService.processQuery(query, options);
+    return await automationEngine.processAutomationRequest(query, options);
   } catch (error) {
     console.error('Error processing AI query:', error);
     return { 

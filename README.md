@@ -1,6 +1,6 @@
 	Terminal in electron that can work with bash but specifically .with llm  model-after an input token/question will   return in a rule/schema that will need to set parameters/scenario to divert a otherwise wide range of its token use on deliberation/reasoning torward deliberation on an explicit rule/constraint that, on each iteratation, need to return in a specific  schema an emphasized condensed concise array in ranked order with eavh ranked of the next few commands to take in sequence(s; each  , therefore each "object" in the "array" of their(and possibly with a intricate  parsing mechanism for cases of models that dont followthe ruled brevity of their main decision needing to be {(command, command b, command c) , (commanda,commandc, commandf),  ....} focus on specific commands; any other token input will be refreshing their context for efficiency other deliberation/token use returnnd  may be their longer ramblings explanations etc. (the outside data in the schema'd response can be  explanations or whateverr, the 2nd layer  but longer so required response will somewhat be an iterative array-like memory of recursive task consideration , and final output and, on each , selection of a SPECIFIC command to use(command, in sequence) to use best for the task ie. handling installations/organizing 
 
-Sleek dark design - multi-faceted interface; its main functions will be operation from text input, but far more tha a terminal; modern design-focused action panel program; background images can be uploaded auto-faded when a model is called and  output is returned, it will be parsed/filtered for extracurricular words etc; the behind the hood mechanismm is, since we will be getting back  language as structured short lists of commands (with context of the OS in order, 
+Sleek dark design - multi-faceted interface; its main functions will be operation from text input, but far more than a terminal; modern design-focused action panel program;  when a model is called and  output is returned, it will be parsed/filtered by markdown for command words etc; the behind the hood mechanismm is, since we will be getting back  language as structured short lists of commands (with context of the OS in order, 
 	the technical engine is a innovative terminal that frames language and context into singular  words ((commands) made actionable by the terminal being our controlled playground ( ie. not a rule like mosr apps to only output data to a chat box- this engine will be inputting them like generated auto-complete for the user to just press enter/accept, similar to if theyvee executed a very compactly practival suggestion" ; it will have an ao auto-accept toggle mode which will have the technically to auto-press-enter for the user's box,   and after 15 secondswait, the next ap calll iis made to the model , akin  to an iterative problemsolving its step. 	
 	as smooth of a UX ("behind the hood" ) as  a truly autonomous computer-use agent controllin commands for user to accept  as  will  translate them into execution in bash; the 1st ranked returned command (and we there should be a bi-modal case where their prompting/ schema may be loosened to allow slightly longer character lengths, denoting TASKS ie. longer task action handling circumstances like the user asking in terminal to write an excerpt and save it in word or as A note. In thid situation too- the model called via ap won't necessarily know but will need to be prompted/reinforced to return output that is then translated by our backend into executable script aka  opening nano but then a non-constrainted mode to return the text content requested , inputted into the correct terminal section by us  saved as a file on the backend/computer side code by project code.]]]
 
@@ -160,6 +160,31 @@ Special handling for text editors and file creation:
 - **Async Operations**: Non-blocking AI calls and command execution
 - **Memory Management**: Efficient terminal history management
 - **UI Responsiveness**: Smooth animations and transitions
+
+
+
+
+Git Automation: Added Git commands (init, add, commit, push) to automation_engine.js for version control integration
+Environment Detection: Implemented project type detection in ai_service.js to provide better context for AI-generated commands
+Security Validation: Added dangerous command blocking in command_executor.js to prevent harmful operations
+Session Context: Created session_context.js to maintain st
+
+Note System: Added a NoteManager for saving command sequences and a NotePlugin for note operations
+Command Learning: Enhanced AutomationEngine to learn and reuse successful command sequences
+Fast Search: Created a SearchPlugin with content, file, and smart search capabilities
+Plugin Architecture: Implemented a robust plugin system with Git, Docker, Cloud, Note and Search plugins
+Smart Referencing: Added context-aware command suggestions in the AI prompt system
+These features work together to provide:
+
+Persistent storage of command sequences as notes
+Intelligent reuse of learned commands without AI calls
+Optimized file content and name searching
+Context-aware command suggestions
+Modular extensibility through plugins
+
+
+
+
 
 ## Troubleshooting
 
