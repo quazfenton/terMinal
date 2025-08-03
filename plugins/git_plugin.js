@@ -10,18 +10,43 @@ class GitPlugin {
         name: "git-init",
         description: "Initialize Git repository",
         pattern: /^git init$/i,
-        execute: async () => "Initialized empty Git repository"
+        execute: async () => this.commandExecutor.executeShellCommand('git init')
       },
       {
         name: "git-status",
         description: "Show repository status",
         pattern: /^git status$/i,
-        execute: async () => "On branch main\nYour branch is up to date"
+        execute: async () => this.commandExecutor.executeShellCommand('git status')
+      },
+      {
+        name: "git-add",
+        description: "Add files to staging area",
+        pattern: /^git add\s+(.+)$/i,
+        execute: async (match) => this.commandExecutor.executeShellCommand(`git add ${match[1]}`)
+      },
+      {
+        name: "git-commit",
+        description: "Commit changes",
+        pattern: /^git commit -m\s+["'](.+)["']$/i,
+        execute: async (match) => this.commandExecutor.executeShellCommand(`git commit -m "${match[1]}"`)
+      },
+      {
+        name: "git-push",
+        description: "Push changes to remote",
+        pattern: /^git push$/i,
+        execute: async () => this.commandExecutor.executeShellCommand('git push')
+      },
+      {
+        name: "git-pull",
+        description: "Pull changes from remote",
+        pattern: /^git pull$/i,
+        execute: async () => this.commandExecutor.executeShellCommand('git pull')
       }
     ];
   }
   
-  initialize(terminal) {
+  initialize(commandExecutor) {
+    this.commandExecutor = commandExecutor;
     console.log("Git plugin initialized");
   }
 }

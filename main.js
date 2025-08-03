@@ -16,23 +16,23 @@ const CommandExecutor = require('./command_executor');
 const AutomationEngine = require('./automation_engine');
 const PluginManager = require('./plugin_manager');
 const NoteManager = require('./note_manager');
+const SessionContext = require('./session_context'); // Import SessionContext
 
 // Initialize services
-const aiService = new AIService({
-  apiKey: process.env.CLAUDE_API_KEY || 'dummy-key-for-development',
-  modelName: 'claude-3-sonnet-20240229'
-});
+const aiService = new AIService();
 const responseParser = new AIResponseParser();
 const commandExecutor = new CommandExecutor();
 const noteManager = new NoteManager();
 const pluginManager = new PluginManager(commandExecutor);
 const automationEngine = new AutomationEngine(aiService, commandExecutor);
+const sessionContext = SessionContext; // Initialize SessionContext
 
 // Load plugins
 pluginManager.loadPlugins();
 
-// Add note manager to terminal context
+// Add note manager and session context to global context for renderer access
 global.noteManager = noteManager;
+global.sessionContext = sessionContext;
 
 let mainWindow;
 
@@ -75,6 +75,7 @@ function createWindow() {
   global.mainWindow = mainWindow;
 }
 
+app.disableHardwareAcceleration();
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
@@ -154,6 +155,25 @@ ipcMain.handle('handle-special-command', async (event, command, options = {}) =>
     return await commandExecutor.handleSpecialCommand(specialCommand, options);
   }
   return { success: false, output: 'Not a special command' };
+});
+
+// IPC Handlers for AI Model Management
+ipcMain.handle('get-available-ai-models', async () => {
+  return aiService.getAvailableModels();
+});
+
+ipcMain.handle('set-ai-model', async (event, modelName) => {
+  try {
+    aiService.setModel(modelName);
+    return { success: true, modelName: aiService.modelName };
+  } catch (error) {
+    console.error('Error setting AI model:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-current-ai-model', async () => {
+  return aiService.modelName;
 });
 
 // IPC Handlers for System Information

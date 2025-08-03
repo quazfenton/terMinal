@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system operations
   getFileSystemInfo: () => ipcRenderer.invoke('get-file-system-info'),
   
+  // AI Model Management
+  getAvailableAiModels: () => ipcRenderer.invoke('get-available-ai-models'),
+  setAiModel: (modelName) => ipcRenderer.invoke('set-ai-model', modelName),
+  getCurrentAiModel: () => ipcRenderer.invoke('get-current-ai-model'),
+
   // Automation channels
   onAutomationUpdate: (callback) => ipcRenderer.on('automation-update', callback),
   onAutomationNext: (callback) => ipcRenderer.on('automation-next', callback)

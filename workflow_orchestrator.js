@@ -18,6 +18,7 @@ class WorkflowOrchestrator extends EventEmitter {
     this.activeWorkflow = null;
     this.workflowDir = path.join(__dirname, 'workflows');
     this.userPreferences = new Map();
+    this.sessionContext = require('./session_context'); // Import sessionContext
   }
 
   /**
@@ -71,69 +72,70 @@ class WorkflowOrchestrator extends EventEmitter {
   /**
    * Load user preferences for workflow execution
    */
-  async loadUserPreferences() {
-    try {
-      const prefPath = path.join(this.workflowDir, 'preferences.json');
-      const content = await fs.readFile(prefPath, 'utf8');
-      const prefs = JSON.parse(content);
-      Object.entries(prefs).forEach(([key, value]) => this.userPreferences.set(key, value));
-    } catch (error) {
-      // Preferences file doesn't exist yet
-    }
-  }
+   async loadUserPreferences() {
+     try {
+       const savedPreferences = this.sessionContext.get('workflowPreferences', {});
+       Object.entries(savedPreferences).forEach(([key, value]) => this.userPreferences.set(key, value));
+     } catch (error) {
+       console.warn('Error loading workflow preferences from session context:', error);
+     }
+   }
 
   /**
    * Save user preferences
    */
-  async saveUserPreferences() {
-    const prefPath = path.join(this.workflowDir, 'preferences.json');
-    const prefs = Object.fromEntries(this.userPreferences);
-    await fs.writeFile(prefPath, JSON.stringify(prefs, null, 2));
-  }
+   async saveUserPreferences() {
+     const prefs = Object.fromEntries(this.userPreferences);
+     this.sessionContext.set('workflowPreferences', prefs);
+   }
 
-  /**
-   * Execute a workflow by ID
-   * @param {string} workflowId - Workflow ID
-   * @param {Object} parameters - Workflow parameters
-   * @returns {Promise<Object>} Execution result
-   */
   async executeWorkflow(workflowId, parameters = {}) {
     const workflow = this.workflows.get(workflowId);
     if (!workflow) {
       return { success: false, error: `Workflow ${workflowId} not found` };
     }
 
+    if (!this.validateWorkflow(workflow)) {
+      return { success: false, error: `Invalid workflow format for ${workflowId}` };
+    }
+
     this.activeWorkflow = { id: workflowId, steps: [], rollback: [] };
     const results = [];
+    this.emit('workflow-started', { workflowId, parameters });
 
     try {
       for (const step of workflow.steps) {
+        this.emit('step-started', { workflowId, step });
         if (await this.shouldExecuteStep(step, results)) {
           const command = this.substituteParameters(step.command, { ...parameters, ...this.userPreferences });
-          const options = step.fileContent ? { fileContent: this.substituteParameters(step.fileContent, parameters) } : {};
-          
+          const options = step.fileContent
+            ? { fileContent: this.substituteParameters(step.fileContent, parameters) }
+            : {};
+
           const result = await this.commandExecutor.executeCommand(command, options);
           results.push({ stepId: step.id, ...result });
 
-          // Store rollback command if applicable
           if (this.canRollback(step)) {
             this.activeWorkflow.rollback.push(this.generateRollbackCommand(step, command));
           }
 
           if (!result.success && step.critical) {
             await this.executeRollback();
+            this.emit('workflow-failed', { workflowId, error: `Step ${step.id} failed` });
             return { success: false, results, error: `Step ${step.id} failed` };
           }
 
-          this.emit('step-completed', { stepId: step.id, result });
+          this.emit('step-completed', { workflowId, step, result });
         }
       }
 
+      this.emit('workflow-finished', { workflowId, results });
       this.activeWorkflow = null;
       this.updateUserPreferences(parameters);
       return { success: true, results };
     } catch (error) {
       await this.executeRollback();
+      this.emit('workflow-failed', { workflowId, error: error.message });
       return { success: false, results, error: error.message };
     }
   }
@@ -176,7 +178,11 @@ class WorkflowOrchestrator extends EventEmitter {
    * @returns {string} Substituted string
    */
   substituteParameters(template, parameters) {
-    return template.replace(/{{(\w+)}}/g, (_, key) => parameters[key] || '');
+    return template.replace(/{{(.*?)}}/g, (_, key) => {
+      const [path, defaultValue] = key.split('|').map(s => s.trim());
+      const value = path.split('.').reduce((obj, p) => (obj ? obj[p] : undefined), parameters);
+      return value !== undefined ? value : defaultValue || '';
+    });
   }
 
   /**
@@ -237,7 +243,7 @@ class WorkflowOrchestrator extends EventEmitter {
    * @param {Object} workflow - Workflow definition
    */
   async createWorkflow(workflow) {
-    if (!workflow.id || !workflow.steps) {
+    if (!this.validateWorkflow(workflow)) {
       throw new Error('Invalid workflow format');
     }
     this.workflows.set(workflow.id, workflow);
@@ -245,6 +251,18 @@ class WorkflowOrchestrator extends EventEmitter {
       path.join(this.workflowDir, `${workflow.id}.json`),
       JSON.stringify(workflow, null, 2)
     );
+  }
+
+  validateWorkflow(workflow) {
+    if (!workflow || !workflow.id || !Array.isArray(workflow.steps)) {
+      return false;
+    }
+    for (const step of workflow.steps) {
+      if (!step.id || !step.command) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

@@ -45,7 +45,7 @@ async function initializeApp() {
   const fontSelect = document.getElementById('font-select');
   
   // Load saved settings
-  loadAppearanceSettings();
+  await loadAppearanceSettings(); // Await this as it fetches AI models
   
   // Get current directory
   currentDirectory = await window.electronAPI.getCurrentDirectory();
@@ -205,10 +205,20 @@ function setupEventListeners() {
     localStorage.setItem('terminalFont', event.target.value);
   });
 
-  aiProviderSelect.addEventListener('change', (event) => {
+  aiProviderSelect.addEventListener('change', async (event) => {
     const selectedProvider = event.target.value;
-    aiModelInfo.textContent = `${event.target.options[event.target.selectedIndex].text} Connected`;
-    localStorage.setItem('aiProvider', selectedProvider);
+    const result = await window.electronAPI.setAiModel(selectedProvider);
+    if (result.success) {
+      aiModelInfo.textContent = `${event.target.options[event.target.selectedIndex].text} Connected`;
+      localStorage.setItem('aiProvider', selectedProvider);
+    } else {
+      addTerminalLine(`Failed to set AI model: ${result.error}`, 'error');
+      // Revert selection if setting failed
+      const currentModel = await window.electronAPI.getCurrentAiModel();
+      event.target.value = currentModel;
+      const currentModelText = providerSelect.options[providerSelect.selectedIndex].text;
+      aiModelInfo.textContent = `${currentModelText} Connected`;
+    }
   });
   
   // Command queue click delegation
@@ -309,10 +319,10 @@ async function executeDirectCommand(command) {
         currentDirectory = await window.electronAPI.getCurrentDirectory();
       }
     } else {
-      addTerminalLine(result.output || result.error || 'Command failed', 'error');
+      addTerminalLine(`Command failed: ${result.output || result.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
-    addTerminalLine(`Error: ${error.message}`, 'error');
+    addTerminalLine(`Execution Error: ${error.message}`, 'error');
   } finally {
     isProcessing = false;
     updateUIState();
@@ -357,7 +367,7 @@ async function processWithAutomation(userInput) {
       addTerminalLine(`Automation Error: ${response.error}`, 'error');
     }
   } catch (error) {
-    addTerminalLine(`Error: ${error.message}`, 'error');
+    addTerminalLine(`AI Processing Error: ${error.message}`, 'error');
   } finally {
     isProcessing = false;
     updateUIState();
@@ -689,7 +699,7 @@ function highlightExecutedSequence(sequenceId) {
 /**
  * Update UI state based on processing state
  */
-function updateUIState() {
+async function updateUIState() {
   // Update send button
   const sendButton = document.getElementById('sendButton');
   sendButton.disabled = isProcessing;
@@ -705,7 +715,11 @@ function updateUIState() {
   
   // Update AI model info
   const aiModelInfo = document.getElementById('aiModelInfo');
-  aiModelInfo.textContent = isProcessing ? 'AI Processing...' : 'Claude Sonnet 4 Connected';
+  const currentModelName = await window.electronAPI.getCurrentAiModel();
+  const providerSelect = document.getElementById('ai-provider-select');
+  const selectedOption = Array.from(providerSelect.options).find(option => option.value === currentModelName);
+  const modelText = selectedOption ? selectedOption.text : 'Unknown Model';
+  aiModelInfo.textContent = isProcessing ? 'AI Processing...' : `${modelText} Connected`;
 }
 
 /**
@@ -733,7 +747,7 @@ function applyTheme(themeName) {
 /**
  * Load appearance settings from localStorage
  */
-function loadAppearanceSettings() {
+async function loadAppearanceSettings() {
   const savedTheme = localStorage.getItem('terminalTheme');
   if (savedTheme) {
     applyTheme(savedTheme);
@@ -752,11 +766,30 @@ function loadAppearanceSettings() {
   }
 
   const savedAiProvider = localStorage.getItem('aiProvider');
-  if (savedAiProvider) {
-    const providerSelect = document.getElementById('ai-provider-select');
-    providerSelect.value = savedAiProvider;
-    document.getElementById('aiModelInfo').textContent = `${providerSelect.options[providerSelect.selectedIndex].text} Connected`;
+  const providerSelect = document.getElementById('ai-provider-select');
+  
+  // Populate AI provider dropdown
+  const availableModels = await window.electronAPI.getAvailableAiModels();
+  providerSelect.innerHTML = ''; // Clear existing options
+  for (const displayName in availableModels) {
+    const option = document.createElement('option');
+    option.value = availableModels[displayName];
+    option.textContent = displayName;
+    providerSelect.appendChild(option);
   }
+
+  if (savedAiProvider) {
+    providerSelect.value = savedAiProvider;
+  } else if (Object.keys(availableModels).length > 0) {
+    // Set default if no saved provider but models are available
+    providerSelect.value = Object.values(availableModels);
+  }
+  
+  // Update AI model info display after populating and setting value
+  const currentModelName = await window.electronAPI.getCurrentAiModel();
+  const selectedOption = Array.from(providerSelect.options).find(option => option.value === currentModelName);
+  const modelText = selectedOption ? selectedOption.text : 'Unknown Model';
+  document.getElementById('aiModelInfo').textContent = `${modelText} Connected`;
 }
 
 // Export functions for preload script

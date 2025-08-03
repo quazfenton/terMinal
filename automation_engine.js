@@ -17,77 +17,38 @@ class AutomationEngine {
     this.aiService = aiService;
     this.commandExecutor = commandExecutor;
     this.automationRules = new Map();
-    this.autoAcceptInterval = 15000; // 15 seconds in milliseconds
+    this.rulesDirectory = path.join(__dirname, 'rules');
+    this.autoAcceptInterval = 15000;
     this.isAutoAcceptRunning = false;
     this.iterativeTaskQueue = [];
     this.learnedSequences = new Map();
   }
 
-  /**
-   * Initialize the automation engine with default rules
-   */
   async initialize() {
-    await this.loadDefaultRules();
+    await this.loadAutomationRules();
     this.startAutoAcceptLoop();
   }
 
-  /**
-   * Load default automation rules
-   */
-  async loadDefaultRules() {
-    const defaultRules = [
-      {
-        id: 'auto-install',
-        pattern: /install\s+(npm|pip|apt|brew)\s+(\S+)/i,
-        action: this.handlePackageInstall.bind(this),
-        priority: 1
-      },
-      {
-        id: 'file-creation',
-        pattern: /(?:create|write|generate)\s+(?:file|document)\s+(\S+)/i,
-        action: this.handleFileCreation.bind(this),
-        priority: 2
-      },
-      {
-        id: 'directory-navigation',
-        pattern: /(?:go\s+to|navigate\s+to|cd)\s+(\S+)/i,
-        action: this.handleNavigation.bind(this),
-        priority: 3
-      },
-      {
-        id: 'code-generation',
-        pattern: /(?:write|generate)\s+(?:code|script)\s+(?:in\s+)?(\w+)\s+(?:for\s+)?(.+)/i,
-        action: this.handleCodeGeneration.bind(this),
-        priority: 4
-      },
-      // New Git automation rules
-      {
-        id: 'git-init',
-        pattern: /(?:initialize|create)\s+git\s+repository/i,
-        action: this.handleGitInit.bind(this),
-        priority: 2
-      },
-      {
-        id: 'git-add',
-        pattern: /(?:add|stage)\s+files?\s+to\s+git/i,
-        action: this.handleGitAdd.bind(this),
-        priority: 3
-      },
-      {
-        id: 'git-commit',
-        pattern: /commit\s+changes?\s+(?:with\s+message\s+)?(["'])(.*?)\1/i,
-        action: this.handleGitCommit.bind(this),
-        priority: 4
-      },
-      {
-        id: 'git-push',
-        pattern: /push\s+(?:changes|commits)\s+to\s+remote/i,
-        action: this.handleGitPush.bind(this),
-        priority: 5
-      }
-    ];
+  async loadAutomationRules() {
+    try {
+      await fs.mkdir(this.rulesDirectory, { recursive: true });
+      const ruleFiles = await fs.readdir(this.rulesDirectory);
 
-    defaultRules.forEach(rule => this.automationRules.set(rule.id, rule));
+      for (const file of ruleFiles) {
+        if (file.endsWith('.js')) {
+          try {
+            const ruleModule = require(path.join(this.rulesDirectory, file));
+            if (ruleModule.id && ruleModule.pattern && ruleModule.action) {
+              this.automationRules.set(ruleModule.id, ruleModule);
+            }
+          } catch (error) {
+            console.error(`Failed to load automation rule ${file}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading automation rules:', error);
+    }
   }
 
   /**
@@ -125,7 +86,7 @@ class AutomationEngine {
    */
   async handleGitCommit(input, rule) {
     const match = input.match(rule.pattern);
-    const message = match[2] || "Automated commit by AI Terminal";
+    const message = match && match ? match : "Automated commit by AI Terminal";
     
     return {
       success: true,
@@ -160,51 +121,69 @@ class AutomationEngine {
    */
   async processAutomationRequest(input) {
     try {
-      // Check for matching automation rule
       const ruleMatch = this.findMatchingRule(input);
       if (ruleMatch) {
-        return await ruleMatch.action(input, ruleMatch);
-      }
-      
-      // Check learned sequences
-      for (const [key, sequence] of this.learnedSequences) {
-        if (input.includes(key)) {
-          return {
-            success: true,
-            commandSequences: [sequence],
-            explanation: `Using learned sequence for "${key}"`
-          };
+        try {
+          return await ruleMatch.action(input, ruleMatch, this);
+        } catch (error) {
+          return { success: false, error: `Rule action failed: ${error.message}` };
         }
       }
 
-      // Fallback to AI processing
-      const aiResponse = await this.aiService.processQuery(input, {
-        biModalMode: true,
-        includeDirectoryContext: true
-      });
-
-      if (!aiResponse.success) {
+      if (this.isCommonCommand(input)) {
         return {
-          success: false,
-          error: aiResponse.error
+          success: true,
+          commandSequences: [
+            {
+              id: `common-${input}`,
+              rank: 1,
+              commands: [input],
+              description: `Execute common command: ${input}`,
+            },
+          ],
         };
       }
 
-      const parsedResponse = await this.parseAutomationResponse(aiResponse.rawResponse);
-      
-      // Store successful sequences for future use
-      if (parsedResponse.success && parsedResponse.commandSequences.length > 0) {
-        const key = input.split(' ').slice(0, 3).join(' '); // Use first 3 words as key
-        this.learnedSequences.set(key, parsedResponse.commandSequences[0]);
+      const learnedSequence = this.getLearnedSequence(input);
+      if (learnedSequence) {
+        return {
+          success: true,
+          commandSequences: [learnedSequence],
+          explanation: `Using learned sequence for "${input}"`,
+        };
       }
-      
+
+      const aiResponse = await this.aiService.processQuery(input, {
+        biModalMode: true,
+        includeDirectoryContext: true,
+      });
+
+      if (!aiResponse.success) {
+        return { success: false, error: aiResponse.error };
+      }
+
+      const parsedResponse = await this.aiService.responseParser.parseResponse(
+        aiResponse.rawResponse,
+        true
+      );
+
+      parsedResponse.commandSequences = parsedResponse.commandSequences.map(
+        (seq, index) => ({
+          ...seq,
+          automationId: `auto-${index}-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          status: 'pending',
+        })
+      );
+
+      if (parsedResponse.success && parsedResponse.commandSequences.length > 0) {
+        this.learnSequence(input, parsedResponse.commandSequences);
+      }
+
       this.iterativeTaskQueue.push(...parsedResponse.commandSequences);
       return parsedResponse;
     } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
+      return { success: false, error: error.message };
     }
   }
 
@@ -222,24 +201,12 @@ class AutomationEngine {
     return null;
   }
 
-  /**
-   * Parse AI response for automation
-   * @param {string} rawResponse - Raw AI response
-   * @returns {Object} Parsed automation response
-   */
-  async parseAutomationResponse(rawResponse) {
-    const parser = new AIResponseParser();
-    const parsed = parser.parseResponse(rawResponse, true);
-    
-    // Enhance sequences with automation metadata
-    parsed.commandSequences = parsed.commandSequences.map((seq, index) => ({
-      ...seq,
-      automationId: `auto-${index}-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      status: 'pending'
-    }));
-
-    return parsed;
+  isCommonCommand(input) {
+    const commonCommands = [
+      'ls', 'cd', 'pwd', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'cat', 'grep', 'find', 'man', 'ps', 'kill', 'top', 'df', 'du', 'chmod', 'chown', 'ssh', 'scp', 'ftp', 'wget', 'curl', 'ping', 'netstat', 'ifconfig', 'ip', 'route', 'uname', 'history', 'clear', 'exit'
+    ];
+    const command = input.split(' '); // Get the first word as the command
+    return commonCommands.includes(command);
   }
 
   /**
@@ -250,8 +217,8 @@ class AutomationEngine {
    */
   async handlePackageInstall(input, rule) {
     const match = input.match(rule.pattern);
-    const packageManager = match[1].toLowerCase();
-    const packageName = match[2];
+    const packageManager = match && match ? match.toLowerCase() : '';
+    const packageName = match && match ? match : '';
 
     const commands = {
       npm: `npm install ${packageName}`,
@@ -281,7 +248,7 @@ class AutomationEngine {
    */
   async handleFileCreation(input, rule) {
     const match = input.match(rule.pattern);
-    const filename = match[1];
+    const filename = match && match ? match : '';
     
     // Generate AI-powered file content based on filename extension
     const extension = path.extname(filename).toLowerCase();
@@ -307,7 +274,7 @@ class AutomationEngine {
    */
   async handleNavigation(input, rule) {
     const match = input.match(rule.pattern);
-    const targetDir = match[1];
+    const targetDir = match && match ? match : '';
 
     return {
       success: true,
@@ -328,8 +295,8 @@ class AutomationEngine {
    */
   async handleCodeGeneration(input, rule) {
     const match = input.match(rule.pattern);
-    const language = match[1].toLowerCase();
-    const description = match[2];
+    const language = match && match ? match.toLowerCase() : '';
+    const description = match && match ? match : '';
     
     const filename = `script-${Date.now()}.${this.getLanguageExtension(language)}`;
     const content = await this.generateCodeContent(language, description);
@@ -370,8 +337,8 @@ class AutomationEngine {
     );
 
     if (aiResponse.success) {
-      const parsed = await this.parseAutomationResponse(aiResponse.rawResponse);
-      return parsed.commandSequences[0]?.fileContent || defaultContent;
+      const parsed = await this.aiService.responseParser.parseResponse(aiResponse.rawResponse, true);
+      return parsed.commandSequences?.fileContent || defaultContent;
     }
     
     return defaultContent;
@@ -390,8 +357,8 @@ class AutomationEngine {
     );
 
     if (aiResponse.success) {
-      const parsed = await this.parseAutomationResponse(aiResponse.rawResponse);
-      return parsed.commandSequences[0]?.fileContent || this.getDefaultCode(language);
+      const parsed = await this.aiService.responseParser.parseResponse(aiResponse.rawResponse, true);
+      return parsed.commandSequences?.fileContent || this.getDefaultCode(language);
     }
     
     return this.getDefaultCode(language);
@@ -439,7 +406,7 @@ class AutomationEngine {
     
     setInterval(async () => {
       if (this.iterativeTaskQueue.length > 0 && global.autoAcceptMode) {
-        const sequence = this.iterativeTaskQueue[0];
+        const sequence = this.iterativeTaskQueue; // Get the first sequence
         const result = await this.commandExecutor.executeSequence(sequence.commands, {
           fileContent: sequence.fileContent,
           stopOnError: true
@@ -459,29 +426,42 @@ class AutomationEngine {
 
         // Trigger next iteration if needed
         if (this.iterativeTaskQueue.length > 0) {
-          global.mainWindow.webContents.send('automation-next', this.iterativeTaskQueue[0]);
+          global.mainWindow.webContents.send('automation-next', this.iterativeTaskQueue); // Pass the next sequence
         }
       }
     }, this.autoAcceptInterval);
   }
 
-  /**
-   * Add custom automation rule
-   * @param {Object} rule - Custom rule object
-   */
-  addAutomationRule(rule) {
+  learnSequence(input, sequence) {
+    const projectType = this.commandExecutor.projectType || 'general';
+    const key = `${projectType}:${input}`;
+    this.learnedSequences.set(key, sequence);
+  }
+
+  getLearnedSequence(input) {
+    const projectType = this.commandExecutor.projectType || 'general';
+    const key = `${projectType}:${input}`;
+    return this.learnedSequences.get(key);
+  }
+
+  async addAutomationRule(rule) {
     if (!rule.id || !rule.pattern || !rule.action) {
       throw new Error('Invalid rule format');
     }
     this.automationRules.set(rule.id, rule);
+    const rulePath = path.join(this.rulesDirectory, `${rule.id}.js`);
+    const content = `module.exports = ${JSON.stringify(rule, null, 2)};`;
+    await fs.writeFile(rulePath, content);
   }
 
-  /**
-   * Remove automation rule
-   * @param {string} ruleId - Rule ID to remove
-   */
-  removeAutomationRule(ruleId) {
+  async removeAutomationRule(ruleId) {
     this.automationRules.delete(ruleId);
+    const rulePath = path.join(this.rulesDirectory, `${ruleId}.js`);
+    try {
+      await fs.unlink(rulePath);
+    } catch (error) {
+      // Ignore if file doesn't exist
+    }
   }
 }
 

@@ -12,6 +12,7 @@ class PluginManager {
     this.plugins = new Map();
     this.commandExecutor = commandExecutor;
     this.pluginsDirectory = path.join(__dirname, 'plugins');
+    this.specialHandlers = new Map();
   }
 
   /**
@@ -65,7 +66,7 @@ class PluginManager {
    * @param {string} command - The command to execute
    * @returns {Object|null} The matched command info, or null
    */
-  findCommandHandler(command) {
+  findPluginForCommand(command) {
     // First try direct command name match
     const commandName = command.split(' ')[0];
     if (this.commandRegistry.has(commandName)) {
@@ -104,14 +105,22 @@ class PluginManager {
   async executePluginCommand(pluginInfo) {
     const { plugin, command, match } = pluginInfo;
     try {
-      return await command.execute(match);
+      return await command.execute(match, this.commandExecutor);
     } catch (error) {
       console.error(`Error executing plugin command '${command.name}':`, error);
       return {
         success: false,
-        output: `Plugin error: ${error.message}`
+        output: `Plugin error: ${error.message}`,
       };
     }
+  }
+
+  registerSpecialHandler(commandName, handler) {
+    this.specialHandlers.set(commandName, handler);
+  }
+
+  getSpecialHandler(commandName) {
+    return this.specialHandlers.get(commandName);
   }
 }
 

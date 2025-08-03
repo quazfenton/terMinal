@@ -20,9 +20,9 @@ class CommandExecutor {
     this.pluginManager.loadPlugins();
     this.currentProcess = null;
     this.isExecuting = false;
-    this.commandHistory = [];
+    this.commandHistory = global.sessionContext.get('commandHistory', []); // Load history from session context
     this.maxHistoryLength = 100;
-    this.currentDirectory = process.cwd();
+    this.currentDirectory = global.sessionContext.get('currentDirectory', process.cwd()); // Load current directory from session context
     this.specialHandlers = {
       'nano': this.handleTextEditor.bind(this),
       'vim': this.handleTextEditor.bind(this),
@@ -43,38 +43,42 @@ class CommandExecutor {
       return { success: false, output: 'Another command is already running' };
     }
 
+    if (this.isDangerous(command)) {
+      return { success: false, output: `Dangerous command blocked: ${command}` };
+    }
+
     try {
       this.isExecuting = true;
-      
-      // Check for plugin commands first
+
       const pluginInfo = this.pluginManager.findPluginForCommand(command);
-      if (pluginInfo) {
+      if (pluginInfo && typeof pluginInfo.command.execute === 'function') {
         return await this.pluginManager.executePluginCommand(pluginInfo);
       }
 
-      // Check for built-in commands
       if (command.startsWith('cd ')) {
         return await this.handleChangeDirectory(command);
       }
-      
-      // Check for special commands that need custom handling
+
+      if (command.startsWith('sudo ')) {
+        return await this.handleSudo(command, options);
+      }
+
       const specialCommand = this.checkForSpecialCommand(command);
       if (specialCommand) {
         return await this.handleSpecialCommand(specialCommand, options);
       }
-      
-      // Execute regular shell command
-      return await this.executeShellCommand(command);
+
+      const result = await this.executeShellCommand(command);
+      result.output = this.formatOutput(result.output, options);
+      return result;
     } catch (error) {
       console.error('Error executing command:', error);
-      return { 
-        success: false, 
-        output: `Error: ${error.message}` 
+      return {
+        success: false,
+        output: `Error: ${error.message}`,
       };
     } finally {
       this.isExecuting = false;
-      
-      // Add to history if successful
       this.addToHistory(command);
     }
   }
@@ -124,21 +128,60 @@ class CommandExecutor {
     return new Promise((resolve) => {
       exec(command, { cwd: this.currentDirectory }, (error, stdout, stderr) => {
         if (error) {
-          resolve({ 
-            success: false, 
-            output: stdout || '', 
+          resolve({
+            success: false,
+            output: stdout || '',
             error: error.message,
-            stderr: stderr || '' 
+            stderr: stderr || '',
           });
         } else {
-          resolve({ 
-            success: true, 
-            output: stdout || '', 
-            stderr: stderr || '' 
+          resolve({
+            success: true,
+            output: stdout || '',
+            stderr: stderr || '',
           });
         }
       });
     });
+  }
+
+  isDangerous(command) {
+    const dangerousPatterns = [
+      /^sudo\s+rm\s+-rf\s+\//,
+      /^rm\s+-rf\s+\//,
+      />\s*\/dev\/sd/,
+    ];
+    return dangerousPatterns.some(pattern => pattern.test(command));
+  }
+
+  async handleSudo(command, options) {
+    // In a real application, this would involve a secure password prompt.
+    // For now, we'll simulate it.
+    if (!options.sudoPassword) {
+      return {
+        success: false,
+        output: 'Sudo password required',
+        needsSudo: true,
+      };
+    }
+    const commandWithoutSudo = command.replace(/^sudo\s+/, '');
+    const echoPassword = `echo ${options.sudoPassword} | sudo -S ${commandWithoutSudo}`;
+    return this.executeShellCommand(echoPassword);
+  }
+
+  formatOutput(output, options) {
+    let formattedOutput = output;
+    if (options.trim) {
+      formattedOutput = formattedOutput.trim();
+    }
+    if (options.json) {
+      try {
+        return JSON.parse(formattedOutput);
+      } catch (error) {
+        // Ignore if not valid JSON
+      }
+    }
+    return formattedOutput;
   }
 
   /**
@@ -231,8 +274,11 @@ class CommandExecutor {
       this.currentDirectory = newDir;
       process.chdir(newDir);
       
-      return { 
-        success: true, 
+      // Update session context with the new directory
+      global.sessionContext.set('currentDirectory', newDir);
+
+      return {
+        success: true,
         output: `Changed directory to: ${newDir}`,
         newDirectory: newDir
       };
@@ -383,16 +429,19 @@ class CommandExecutor {
    * @param {string} command - The command to add
    */
   addToHistory(command) {
-    this.commandHistory.push({
+    const historyEntry = {
       command,
       timestamp: new Date().toISOString(),
       directory: this.currentDirectory
-    });
+    };
+    this.commandHistory.push(historyEntry);
     
     // Trim history if it exceeds max length
     if (this.commandHistory.length > this.maxHistoryLength) {
       this.commandHistory = this.commandHistory.slice(-this.maxHistoryLength);
     }
+    // Persist history to session context
+    global.sessionContext.set('commandHistory', this.commandHistory);
   }
 
   /**
@@ -417,6 +466,7 @@ class CommandExecutor {
    */
   clearHistory() {
     this.commandHistory = [];
+    global.sessionContext.set('commandHistory', []);
   }
 
   /**
