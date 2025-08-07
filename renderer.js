@@ -4,63 +4,47 @@
  * Handles UI interactions and rendering for the AI Terminal application.
  */
 
-// Global state
-let currentDirectory = '';
-let isProcessing = false;
-let autoAcceptMode = false;
-let biModalMode = false;
-let commandSequences = [];
-let autoAcceptTimer = null;
-let autoAcceptCountdown = 15; // seconds
-let backgroundImage = null;
-let commandHistory = [];
-let historyIndex = -1;
+import Terminal from './components/Terminal.js';
+import CommandQueue from './components/CommandQueue.js';
+import Input from './components/Input.js';
 
-// DOM Elements
+// State Management
+const state = {
+  currentDirectory: '',
+  isProcessing: false,
+  autoAcceptMode: false,
+  biModalMode: false,
+  commandSequences: [],
+  autoAcceptTimer: null,
+  autoAcceptCountdown: 15,
+  backgroundImage: null,
+  commandHistory: [],
+  historyIndex: -1,
+};
+
+// UI Components
+let terminal;
+let commandQueue;
+let input;
+
 document.addEventListener('DOMContentLoaded', () => {
-  // Initialize the application
   initializeApp();
 });
 
-/**
- * Initialize the application
- */
 async function initializeApp() {
-  // Get DOM elements
-  const terminalArea = document.getElementById('terminalArea');
-  const commandInput = document.getElementById('commandInput');
-  const sendButton = document.getElementById('sendButton');
-  const autoAcceptToggle = document.getElementById('autoAcceptToggle');
-  const biModalToggle = document.getElementById('biModalToggle');
-  const commandQueue = document.getElementById('commandQueue');
-  const backgroundOverlay = document.getElementById('backgroundOverlay');
-  const statusIndicator = document.getElementById('statusIndicator');
-  const aiModelInfo = document.getElementById('aiModelInfo');
-  const backgroundButton = document.getElementById('backgroundButton');
-  const appearanceButton = document.getElementById('appearanceButton');
-  const aiProviderSelect = document.getElementById('ai-provider-select');
-  const modal = document.getElementById('appearanceModal');
-  const closeButton = document.querySelector('.close-button');
-  const themeSelect = document.getElementById('theme-select');
-  const fontSelect = document.getElementById('font-select');
+  terminal = new Terminal('terminalArea');
+  commandQueue = new CommandQueue('commandQueue', executeCommandSequence);
+  input = new Input('commandInput', processUserInput);
+
+  await loadAppearanceSettings();
   
-  // Load saved settings
-  await loadAppearanceSettings(); // Await this as it fetches AI models
+  state.currentDirectory = await window.electronAPI.getCurrentDirectory();
+  terminal.addLog(`Current directory: ${state.currentDirectory}`, 'system');
   
-  // Get current directory
-  currentDirectory = await window.electronAPI.getCurrentDirectory();
-  addTerminalLine(`Current directory: ${currentDirectory}`, 'system');
-  
-  // Set up event listeners
   setupEventListeners();
-  
-  // Set up automation listeners
   setupAutomationListeners();
   
-  // Focus the input
-  commandInput.focus();
-  
-  // Display welcome message
+  input.element.focus();
   displayWelcomeMessage();
 }
 
@@ -240,8 +224,7 @@ function setupEventListeners() {
  * Clear the terminal area
  */
 function clearTerminal() {
-  document.getElementById('terminalArea').innerHTML = '';
-  addTerminalLine('Terminal cleared.', 'system');
+  terminal.clear();
 }
 
 /**
@@ -267,31 +250,22 @@ function navigateHistory(direction) {
 /**
  * Process user input from the command input field
  */
-async function processUserInput() {
-  const commandInput = document.getElementById('commandInput');
-  const userInput = commandInput.value.trim();
-  if (!userInput || isProcessing) return;
-  
-  // Add to history
-  commandHistory.push(userInput);
-  if (commandHistory.length > 100) {
-    commandHistory = commandHistory.slice(-100);
+async function processUserInput(userInput) {
+  if (!userInput || state.isProcessing) return;
+
+  state.commandHistory.push(userInput);
+  if (state.commandHistory.length > 100) {
+    state.commandHistory = state.commandHistory.slice(-100);
   }
-  historyIndex = -1;
-  
-  // Clear input
-  commandInput.value = '';
-  
-  // Display user input in terminal
-  addTerminalLine(userInput, 'user');
-  
-  // Check if it's a direct command (starts with !)
+  state.historyIndex = -1;
+
+  terminal.addLog(userInput, 'user');
+
   if (userInput.startsWith('!')) {
     executeDirectCommand(userInput.substring(1));
     return;
   }
-  
-  // Process with automation engine
+
   await processWithAutomation(userInput);
 }
 
@@ -300,31 +274,26 @@ async function processUserInput() {
  * @param {string} command - The command to execute
  */
 async function executeDirectCommand(command) {
-  isProcessing = true;
+  state.isProcessing = true;
   updateUIState();
-  
+
   try {
-    // Execute the command
     const result = await window.electronAPI.executeCommand(command);
-    
-    // Display result
     if (result.success) {
-      addTerminalLine(result.output, 'output');
+      terminal.addLog(result.output, 'output');
       if (result.stderr) {
-        addTerminalLine(result.stderr, 'error');
+        terminal.addLog(result.stderr, 'error');
       }
-      
-      // Check if directory changed
       if (command.startsWith('cd ')) {
-        currentDirectory = await window.electronAPI.getCurrentDirectory();
+        state.currentDirectory = await window.electronAPI.getCurrentDirectory();
       }
     } else {
-      addTerminalLine(`Command failed: ${result.output || result.error || 'Unknown error'}`, 'error');
+      terminal.addLog(`Command failed: ${result.output || result.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
-    addTerminalLine(`Execution Error: ${error.message}`, 'error');
+    terminal.addLog(`Execution Error: ${error.message}`, 'error');
   } finally {
-    isProcessing = false;
+    state.isProcessing = false;
     updateUIState();
   }
 }
@@ -380,9 +349,9 @@ async function processWithAutomation(userInput) {
  */
 async function executeCommandSequence(sequenceId) {
   // Cancel any auto-accept countdown
-  if (autoAcceptTimer) {
-    clearInterval(autoAcceptTimer);
-    autoAcceptTimer = null;
+  if (state.autoAcceptTimer) {
+    clearInterval(state.autoAcceptTimer);
+    state.autoAcceptTimer = null;
     
     // Remove any countdown displays
     const countdowns = document.querySelectorAll('.auto-accept-timer');
@@ -390,13 +359,13 @@ async function executeCommandSequence(sequenceId) {
   }
   
   // Find the sequence
-  const sequence = commandSequences.find(seq => seq.id === sequenceId);
+  const sequence = state.commandSequences.find(seq => seq.id === sequenceId);
   if (!sequence) {
-    addTerminalLine(`Error: Command sequence ${sequenceId} not found`, 'error');
+    terminal.addLog(`Error: Command sequence ${sequenceId} not found`, 'error');
     return;
   }
-  
-  isProcessing = true;
+
+  state.isProcessing = true;
   updateUIState();
   
   try {
@@ -408,7 +377,7 @@ async function executeCommandSequence(sequenceId) {
       if (!command || command.trim() === '') continue;
       
       // Display the command
-      addTerminalLine(command, 'command');
+      terminal.addLog(command, 'command');
       
       // Check if this is a file creation command and we have content
       const options = {};
@@ -426,19 +395,16 @@ async function executeCommandSequence(sequenceId) {
       // Display result
       if (result.success) {
         if (result.output) {
-          addTerminalLine(result.output, 'output');
+          terminal.addLog(result.output, 'output');
         }
         if (result.stderr) {
-          addTerminalLine(result.stderr, 'error');
+          terminal.addLog(result.stderr, 'error');
         }
-        
-        // Check if directory changed
         if (command.startsWith('cd ')) {
-          currentDirectory = await window.electronAPI.getCurrentDirectory();
+          state.currentDirectory = await window.electronAPI.getCurrentDirectory();
         }
       } else {
-        addTerminalLine(result.output || result.error || 'Command failed', 'error');
-        // Stop execution on error
+        terminal.addLog(result.output || result.error || 'Command failed', 'error');
         break;
       }
     }
@@ -446,9 +412,9 @@ async function executeCommandSequence(sequenceId) {
     // Highlight the executed sequence
     highlightExecutedSequence(sequenceId);
   } catch (error) {
-    addTerminalLine(`Error: ${error.message}`, 'error');
+    terminal.addLog(`Error: ${error.message}`, 'error');
   } finally {
-    isProcessing = false;
+    state.isProcessing = false;
     updateUIState();
   }
 }
@@ -494,48 +460,7 @@ function startAutoAcceptCountdown(sequenceId) {
  * @returns {HTMLElement} The added line element
  */
 function addTerminalLine(text, type = 'output') {
-  const terminalArea = document.getElementById('terminalArea');
-  const line = document.createElement('div');
-  line.className = `terminal-line fade-in`;
-  
-  const prompt = document.createElement('span');
-  prompt.className = 'terminal-prompt';
-  
-  const content = document.createElement('span');
-  content.className = 'terminal-content';
-  
-  // Set prompt based on type
-  switch (type) {
-    case 'user':
-      prompt.textContent = '> ';
-      content.textContent = text;
-      break;
-    case 'system':
-      prompt.textContent = '# ';
-      content.textContent = text;
-      break;
-    case 'command':
-      prompt.textContent = '$ ';
-      content.textContent = text;
-      break;
-    case 'error':
-      prompt.textContent = '! ';
-      content.className += ' terminal-error';
-      content.textContent = text;
-      break;
-    default:
-      prompt.textContent = '';
-      content.textContent = text;
-  }
-  
-  line.appendChild(prompt);
-  line.appendChild(content);
-  terminalArea.appendChild(line);
-  
-  // Scroll to bottom
-  terminalArea.scrollTop = terminalArea.scrollHeight;
-  
-  return line;
+  terminal.addLog(text, type);
 }
 
 /**
@@ -598,82 +523,7 @@ function addModelResponse(text) {
  * @param {Array} sequences - The command sequences to render
  */
 function renderCommandQueue(sequences) {
-  const commandQueue = document.getElementById('commandQueue');
-  
-  // Clear existing items
-  commandQueue.innerHTML = '';
-  
-  // Add title
-  const title = document.createElement('div');
-  title.className = 'queue-title';
-  title.textContent = 'COMMAND QUEUE';
-  commandQueue.appendChild(title);
-  
-  // Sort sequences by rank
-  sequences.sort((a, b) => a.rank - b.rank);
-  
-  // Add command items
-  sequences.forEach(sequence => {
-    const item = document.createElement('div');
-    item.className = 'command-item fade-in';
-    item.dataset.sequenceId = sequence.id;
-    
-    // Add rank badge
-    const rank = document.createElement('div');
-    rank.className = 'command-rank';
-    rank.textContent = `#${sequence.rank}`;
-    item.appendChild(rank);
-    
-    // Add commands
-    sequence.commands.forEach((cmd, index) => {
-      const command = typeof cmd === 'string' ? cmd : cmd.command;
-      
-      const cmdText = document.createElement('div');
-      cmdText.className = 'command-text';
-      cmdText.textContent = command;
-      item.appendChild(cmdText);
-      
-      // Add separator if not last command
-      if (index < sequence.commands.length - 1) {
-        const separator = document.createElement('div');
-        separator.style.color = '#666';
-        separator.style.fontSize = '10px';
-        separator.style.margin = '2px 0';
-        separator.textContent = '↓';
-        item.appendChild(separator);
-      }
-    });
-    
-    // Add description
-    if (sequence.description) {
-      const description = document.createElement('div');
-      description.className = 'command-description';
-      description.textContent = sequence.description;
-      item.appendChild(description);
-    }
-    
-    // Add file content indicator if present
-    if (sequence.fileContent) {
-      const fileIndicator = document.createElement('div');
-      fileIndicator.className = 'file-content-indicator';
-      fileIndicator.textContent = 'Includes file content';
-      fileIndicator.style.color = '#00ff88';
-      fileIndicator.style.fontSize = '11px';
-      fileIndicator.style.marginTop = '5px';
-      item.appendChild(fileIndicator);
-    }
-    
-    // Add automation status
-    if (sequence.status) {
-      const status = document.createElement('div');
-      status.className = 'automation-status';
-      status.textContent = `Status: ${sequence.status}`;
-      status.style.color = sequence.status === 'completed' ? '#00ff88' : '#ff5555';
-      item.appendChild(status);
-    }
-    
-    commandQueue.appendChild(item);
-  });
+  commandQueue.render(sequences);
 }
 
 /**
@@ -702,16 +552,13 @@ function highlightExecutedSequence(sequenceId) {
 async function updateUIState() {
   // Update send button
   const sendButton = document.getElementById('sendButton');
-  sendButton.disabled = isProcessing;
-  sendButton.textContent = isProcessing ? 'Processing...' : 'Send';
-  
-  // Update input
-  const commandInput = document.getElementById('commandInput');
-  commandInput.disabled = isProcessing;
-  
-  // Update status indicator
+  sendButton.disabled = state.isProcessing;
+  sendButton.textContent = state.isProcessing ? 'Processing...' : 'Send';
+
+  input.element.disabled = state.isProcessing;
+
   const statusIndicator = document.getElementById('statusIndicator');
-  statusIndicator.style.backgroundColor = isProcessing ? '#ffbd2e' : '#00ff88';
+  statusIndicator.style.backgroundColor = state.isProcessing ? '#ffbd2e' : '#00ff88';
   
   // Update AI model info
   const aiModelInfo = document.getElementById('aiModelInfo');
@@ -719,7 +566,7 @@ async function updateUIState() {
   const providerSelect = document.getElementById('ai-provider-select');
   const selectedOption = Array.from(providerSelect.options).find(option => option.value === currentModelName);
   const modelText = selectedOption ? selectedOption.text : 'Unknown Model';
-  aiModelInfo.textContent = isProcessing ? 'AI Processing...' : `${modelText} Connected`;
+  aiModelInfo.textContent = state.isProcessing ? 'AI Processing...' : `${modelText} Connected`;
 }
 
 /**
