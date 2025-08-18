@@ -1,55 +1,36 @@
-/**
- * Plugin Manager
- * 
- * Handles loading, registering, and executing plugins for the AI Terminal.
- */
-
 const fs = require('fs').promises;
 const path = require('path');
 
 class PluginManager {
   constructor(commandExecutor) {
-    this.plugins = new Map();
     this.commandExecutor = commandExecutor;
     this.pluginsDirectory = path.join(__dirname, 'plugins');
-    this.specialHandlers = new Map();
+    this.commandRegistry = []; // A simple array to hold all command objects
   }
 
   /**
-   * Load all plugins from the plugins directory
+   * Load all plugins from the plugins directory.
    */
   async loadPlugins() {
     try {
-      await fs.mkdir(this.pluginsDirectory, { recursive: true });
       const pluginFiles = await fs.readdir(this.pluginsDirectory);
-
-      // Initialize command registry
-      this.commandRegistry = new Map();
       
       for (const file of pluginFiles) {
         if (file.endsWith('.js')) {
           try {
             const pluginPath = path.join(this.pluginsDirectory, file);
             const PluginClass = require(pluginPath);
-            const pluginInstance = new PluginClass();
+            const pluginInstance = new PluginClass(this.commandExecutor);
             
-            if (typeof pluginInstance.getName === 'function' &&
-                typeof pluginInstance.getCommands === 'function') {
-              const pluginName = pluginInstance.getName();
-              
-              // Initialize plugin with terminal context
-              if (typeof pluginInstance.initialize === 'function') {
-                pluginInstance.initialize(this.commandExecutor);
-              }
-              
-              this.plugins.set(pluginName, pluginInstance);
-              console.log(`Loaded plugin: ${pluginName} with ${pluginInstance.getCommands().length} commands`);
-              
-              // Register plugin commands
+            if (typeof pluginInstance.getCommands === 'function') {
               const commands = pluginInstance.getCommands();
               commands.forEach(cmd => {
-                this.commandRegistry.set(cmd.name, cmd);
+                // Store the regex, handler, and the plugin instance itself
+                this.commandRegistry.push({ ...cmd, plugin: pluginInstance });
               });
+              console.log(`Loaded plugin: ${file} with ${commands.length} commands`);
+            } else {
+                console.warn(`Plugin ${file} does not have a getCommands method.`);
             }
           } catch (error) {
             console.error(`Failed to load plugin ${file}:`, error);
@@ -62,65 +43,41 @@ class PluginManager {
   }
 
   /**
-   * Find a command handler for the given command
-   * @param {string} command - The command to execute
-   * @returns {Object|null} The matched command info, or null
+   * Find a command handler for the given input string.
+   * @param {string} input - The user's input string.
+   * @returns {Object|null} The matched command info, or null.
    */
-  findPluginForCommand(command) {
-    // First try direct command name match
-    const commandName = command.split(' ')[0];
-    if (this.commandRegistry.has(commandName)) {
-      const cmd = this.commandRegistry.get(commandName);
-      const match = command.match(cmd.pattern);
+  findCommandHandler(input) {
+    for (const cmd of this.commandRegistry) {
+      const match = input.match(cmd.command); // cmd.command is the regex
       if (match) {
         return {
-          command: cmd,
-          match
+          handler: cmd.handler, // The function to execute
+          match: match,         // The result of the regex match
+          plugin: cmd.plugin    // The plugin instance
         };
-      }
-    }
-    
-    // Then try pattern matching across all plugins
-    for (const [pluginName, plugin] of this.plugins.entries()) {
-      const commands = plugin.getCommands();
-      for (const cmd of commands) {
-        const match = command.match(cmd.pattern);
-        if (match) {
-          return {
-            plugin,
-            command: cmd,
-            match
-          };
-        }
       }
     }
     return null;
   }
 
   /**
-   * Execute a plugin command
-   * @param {Object} pluginInfo - The plugin and command info from findPluginForCommand
-   * @returns {Promise<Object>} The result of the plugin execution
+   * Execute a plugin command.
+   * @param {Object} commandInfo - The command info from findCommandHandler.
+   * @returns {Promise<Object>} The result of the plugin execution.
    */
-  async executePluginCommand(pluginInfo) {
-    const { plugin, command, match } = pluginInfo;
+  async executePluginCommand(commandInfo) {
+    const { handler, match, plugin } = commandInfo;
     try {
-      return await command.execute(match, this.commandExecutor);
+      // The handler is already bound to the plugin instance
+      return await handler(match);
     } catch (error) {
-      console.error(`Error executing plugin command '${command.name}':`, error);
+      console.error(`Error executing plugin command:`, error);
       return {
         success: false,
         output: `Plugin error: ${error.message}`,
       };
     }
-  }
-
-  registerSpecialHandler(commandName, handler) {
-    this.specialHandlers.set(commandName, handler);
-  }
-
-  getSpecialHandler(commandName) {
-    return this.specialHandlers.get(commandName);
   }
 }
 

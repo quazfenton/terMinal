@@ -1,53 +1,117 @@
 /**
- * Git Plugin - Adds Git version control commands
+ * Git Plugin - Git operations and repository analysis
  */
+
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+
 class GitPlugin {
   getName() { return "Git Plugin"; }
-  
+
   getCommands() {
     return [
       {
-        name: "git-init",
-        description: "Initialize Git repository",
-        pattern: /^git init$/i,
-        execute: async () => this.commandExecutor.executeShellCommand('git init')
-      },
-      {
         name: "git-status",
-        description: "Show repository status",
+        description: "Show git repository status",
         pattern: /^git status$/i,
-        execute: async () => this.commandExecutor.executeShellCommand('git status')
+        execute: async () => {
+          try {
+            const { stdout } = await execAsync('git status --porcelain');
+            if (!stdout.trim()) {
+              return "Working directory is clean";
+            }
+            return `Modified files:\n${stdout}`;
+          } catch (error) {
+            return `Error: ${error.message}`;
+          }
+        }
       },
       {
-        name: "git-add",
-        description: "Add files to staging area",
-        pattern: /^git add\s+(.+)$/i,
-        execute: async (match) => this.commandExecutor.executeShellCommand(`git add ${match[1]}`)
+        name: "git-branch",
+        description: "Show current git branch or switch to a branch",
+        pattern: /^git branch(?:\s+(.+))?$/i,
+        execute: async (match) => {
+          const branchName = match[1];
+          
+          if (!branchName) {
+            // Show current branch
+            try {
+              const { stdout } = await execAsync('git branch --show-current');
+              return `Current branch: ${stdout.trim()}`;
+            } catch (error) {
+              return `Error: ${error.message}`;
+            }
+          } else {
+            // Switch to branch
+            try {
+              await execAsync(`git checkout ${branchName}`);
+              return `Switched to branch: ${branchName}`;
+            } catch (error) {
+              return `Error switching to branch: ${error.message}`;
+            }
+          }
+        }
       },
       {
-        name: "git-commit",
-        description: "Commit changes",
-        pattern: /^git commit -m\s+["'](.+)["']$/i,
-        execute: async (match) => this.commandExecutor.executeShellCommand(`git commit -m "${match[1]}"`)
+        name: "git-commit-analysis",
+        description: "Analyze recent commits for code changes",
+        pattern: /^git commit-analysis(?:\s+(\d+))?$/i,
+        execute: async (match) => {
+          const count = match[1] || 5;
+          try {
+            const { stdout } = await execAsync(`git log --oneline -${count}`);
+            return `Last ${count} commits:\n${stdout}`;
+          } catch (error) {
+            return `Error: ${error.message}`;
+          }
+        }
       },
       {
-        name: "git-push",
-        description: "Push changes to remote",
-        pattern: /^git push$/i,
-        execute: async () => this.commandExecutor.executeShellCommand('git push')
+        name: "git-create-branch",
+        description: "Create and switch to a new git branch",
+        pattern: /^git create-branch (.+)$/i,
+        execute: async (match) => {
+          const branchName = match[1];
+          try {
+            await execAsync(`git checkout -b ${branchName}`);
+            return `Created and switched to new branch: ${branchName}`;
+          } catch (error) {
+            return `Error creating branch: ${error.message}`;
+          }
+        }
       },
       {
-        name: "git-pull",
-        description: "Pull changes from remote",
-        pattern: /^git pull$/i,
-        execute: async () => this.commandExecutor.executeShellCommand('git pull')
+        name: "git-stash",
+        description: "Stash current changes",
+        pattern: /^git stash$/i,
+        execute: async () => {
+          try {
+            const { stdout } = await execAsync('git stash');
+            return stdout.trim() || 'Changes stashed successfully';
+          } catch (error) {
+            return `Error stashing changes: ${error.message}`;
+          }
+        }
+      },
+      {
+        name: "git-unstash",
+        description: "Apply stashed changes",
+        pattern: /^git unstash$/i,
+        execute: async () => {
+          try {
+            const { stdout } = await execAsync('git stash pop');
+            return stdout.trim() || 'Stashed changes applied successfully';
+          } catch (error) {
+            return `Error applying stashed changes: ${error.message}`;
+          }
+        }
       }
     ];
   }
-  
-  initialize(commandExecutor) {
-    this.commandExecutor = commandExecutor;
-    console.log("Git plugin initialized");
+
+  initialize(terminal) {
+    this.terminal = terminal;
   }
 }
 

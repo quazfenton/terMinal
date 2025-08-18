@@ -22,10 +22,12 @@ class AutomationEngine {
     this.isAutoAcceptRunning = false;
     this.iterativeTaskQueue = [];
     this.learnedSequences = new Map();
+    this.pluginCommands = {};
   }
 
   async initialize() {
     await this.loadAutomationRules();
+    this.registerPluginCommands();
     this.startAutoAcceptLoop();
   }
 
@@ -121,6 +123,24 @@ class AutomationEngine {
    */
   async processAutomationRequest(input) {
     try {
+      // First check if input matches any plugin command patterns
+      const pluginMatch = this.matchPluginCommand(input);
+      if (pluginMatch) {
+        return {
+          success: true,
+          commandSequences: [
+            {
+              id: `plugin-${Date.now()}`,
+              rank: 1,
+              commands: [input],
+              description: `Execute plugin command: ${pluginMatch.name}`,
+              pluginCommand: true
+            }
+          ]
+        };
+      }
+
+      // Then check automation rules
       const ruleMatch = this.findMatchingRule(input);
       if (ruleMatch) {
         try {
@@ -130,6 +150,7 @@ class AutomationEngine {
         }
       }
 
+      // Then check common commands
       if (this.isCommonCommand(input)) {
         return {
           success: true,
@@ -144,6 +165,7 @@ class AutomationEngine {
         };
       }
 
+      // Then check learned sequences
       const learnedSequence = this.getLearnedSequence(input);
       if (learnedSequence) {
         return {
@@ -153,6 +175,7 @@ class AutomationEngine {
         };
       }
 
+      // Finally, use AI for complex requests
       const aiResponse = await this.aiService.processQuery(input, {
         biModalMode: true,
         includeDirectoryContext: true,
@@ -192,6 +215,25 @@ class AutomationEngine {
    * @param {string} input - User's input
    * @returns {Object|null} Matching rule or null
    */
+  registerPluginCommands() {
+    const pluginManager = this.commandExecutor.pluginManager;
+    for (const plugin of pluginManager.plugins.values()) {
+      const commands = plugin.getCommands();
+      for (const cmd of commands) {
+        this.pluginCommands[cmd.name] = cmd.pattern;
+      }
+    }
+  }
+
+  matchPluginCommand(input) {
+    for (const [name, pattern] of Object.entries(this.pluginCommands)) {
+      if (pattern.test(input)) {
+        return { name, pattern };
+      }
+    }
+    return null;
+  }
+
   findMatchingRule(input) {
     for (const rule of this.automationRules.values()) {
       if (rule.pattern.test(input)) {
@@ -406,7 +448,9 @@ class AutomationEngine {
     
     setInterval(async () => {
       if (this.iterativeTaskQueue.length > 0 && global.autoAcceptMode) {
-        const sequence = this.iterativeTaskQueue; // Get the first sequence
+        const sequence = this.iterativeTaskQueue[0]; // Get the first sequence
+        
+        // Execute the sequence
         const result = await this.commandExecutor.executeSequence(sequence.commands, {
           fileContent: sequence.fileContent,
           stopOnError: true
@@ -416,17 +460,19 @@ class AutomationEngine {
         sequence.status = result.every(r => r.success) ? 'completed' : 'failed';
         
         // Notify renderer process
-        global.mainWindow.webContents.send('automation-update', {
-          sequence,
-          result
-        });
+        if (global.mainWindow) {
+          global.mainWindow.webContents.send('automation-update', {
+            sequence,
+            result
+          });
+        }
 
         // Remove completed sequence
         this.iterativeTaskQueue.shift();
 
         // Trigger next iteration if needed
-        if (this.iterativeTaskQueue.length > 0) {
-          global.mainWindow.webContents.send('automation-next', this.iterativeTaskQueue); // Pass the next sequence
+        if (this.iterativeTaskQueue.length > 0 && global.mainWindow) {
+          global.mainWindow.webContents.send('automation-next', this.iterativeTaskQueue[0]); // Pass the next sequence
         }
       }
     }, this.autoAcceptInterval);

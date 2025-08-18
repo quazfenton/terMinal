@@ -1,0 +1,164 @@
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Workflow Management
+ipcMain.handle('save-workflow', async (event, workflow) => {
+  try {
+    const result = await workflowOrchestrator.saveWorkflow(workflow);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('load-workflow', async (event, workflowId) => {
+  try {
+    const workflow = await workflowOrchestrator.loadWorkflow(workflowId);
+    return {
+      success: true,
+      workflow
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('execute-workflow', async (event, workflowId, parameters = {}) => {
+  try {
+    const result = await workflowOrchestrator.executeWorkflow(workflowId, parameters);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Note Management
+ipcMain.handle('save-note', async (event, note) => {
+  try {
+    const result = await noteManager.saveNote(note);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('search-notes', async (event, query) => {
+  try {
+    const results = await noteManager.searchNotes(query);
+    return {
+      success: true,
+      results
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// MCP Server Integration
+ipcMain.handle('connect-mcp-server', async (event, serverConfig) => {
+  try {
+    const result = await pluginManager.connectMCPServer(serverConfig);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Web Operations
+ipcMain.handle('fetch-web-content', async (event, url, options = {}) => {
+  try {
+    const webPlugin = pluginManager.getPlugin('web');
+    if (!webPlugin) {
+      throw new Error('Web plugin not available');
+    }
+    
+    const result = await webPlugin.fetchContent(url, options);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// File Operations
+ipcMain.handle('read-file', async (event, filePath) => {
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    return {
+      success: true,
+      content
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('write-file', async (event, filePath, content) => {
+  try {
+    await fs.writeFile(filePath, content, 'utf8');
+    return {
+      success: true
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Security and validation
+function validateCommand(command) {
+  // Basic security checks
+  const dangerousPatterns = [
+    /rm\s+-rf\s+\//, // Dangerous rm commands
+    /sudo\s+rm/, // Sudo rm
+    />\s*\/dev\/sd/, // Writing to disk devices
+    /mkfs/, // Format filesystem
+    /dd\s+if=.*of=\/dev/, // Dangerous dd commands
+  ];
+  
+  return !dangerousPatterns.some(pattern => pattern.test(command));
+}
+
+// Error handling middleware
+function handleError(error, context = '') {
+  console.error(`Error in ${context}:`, error);
+  
+  // Log to file in production
+  if (process.env.NODE_ENV === 'production') {
+    // Implement file logging
+  }
+  
+  return {
+    success: false,
+    error: error.message,
+    context
+  };
+}

@@ -221,3 +221,32 @@ Modular extensibility through plugins
 ## License
 
 MIT License - see LICENSE file for details.
+
+## Media Downloader Plugin
+
+The Media Downloader plugin adds powerful media downloading capabilities to the terminal. It supports:
+- Concurrent downloads with configurable worker pools
+- Bulk downloads from URL lists
+- Both audio and video formats with quality settings
+- Customizable output paths
+
+### Installation
+1. Install yt-dlp dependency:
+```bash
+sudo apt install yt-dlp  # For Debian/Ubuntu
+brew install yt-dlp      # For macOS
+```
+
+2. The plugin will be automatically loaded from the plugins directory
+
+### Usage
+- Download a single video: `download video https://youtube.com/watch?v=example`
+- Download audio: `download audio https://youtube.com/watch?v=example`
+- Bulk download from file: `download-bulk audio urls.txt`
+- Set download path: `set-download-path ~/Downloads`
+
+### Configuration
+Edit `plugins/media_downloader_plugin.js` to change:
+- `outputPath`: Default download directory
+- `maxConcurrency`: Number of concurrent downloads
+- `formats`: Audio/video quality settings

@@ -126,21 +126,51 @@ class CommandExecutor {
    */
   executeShellCommand(command) {
     return new Promise((resolve) => {
-      exec(command, { cwd: this.currentDirectory }, (error, stdout, stderr) => {
-        if (error) {
+      // Split command into parts for safer execution
+      const parts = command.split(' ');
+      const cmd = parts[0];
+      const args = parts.slice(1);
+      
+      const child = spawn(cmd, args, {
+        cwd: this.currentDirectory,
+        shell: false  // Avoid shell injection
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
           resolve({
-            success: false,
-            output: stdout || '',
-            error: error.message,
-            stderr: stderr || '',
+            success: true,
+            output: stdout,
+            stderr: stderr
           });
         } else {
           resolve({
-            success: true,
-            output: stdout || '',
-            stderr: stderr || '',
+            success: false,
+            output: stdout,
+            stderr: stderr,
+            error: `Process exited with code ${code}`
           });
         }
+      });
+      
+      child.on('error', (error) => {
+        resolve({
+          success: false,
+          output: '',
+          stderr: error.message,
+          error: error.message
+        });
       });
     });
   }

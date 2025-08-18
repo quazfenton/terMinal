@@ -14,9 +14,10 @@ const AIService = require('./ai_service');
 const AIResponseParser = require('./ai_response_parser');
 const CommandExecutor = require('./command_executor');
 const AutomationEngine = require('./automation_engine');
-const PluginManager = require('./plugin_manager');
 const NoteManager = require('./note_manager');
-const SessionContext = require('./session_context'); // Import SessionContext
+const PluginManager = require('./plugin_manager');
+const SessionContext = require('./session_context');
+const WorkflowOrchestrator = require('./workflow_orchestrator');
 
 // Initialize services
 const aiService = new AIService();
@@ -25,14 +26,19 @@ const commandExecutor = new CommandExecutor();
 const noteManager = new NoteManager();
 const pluginManager = new PluginManager(commandExecutor);
 const automationEngine = new AutomationEngine(aiService, commandExecutor);
-const sessionContext = SessionContext; // Initialize SessionContext
+const sessionContext = SessionContext;
+const workflowOrchestrator = new WorkflowOrchestrator();
 
 // Load plugins
 pluginManager.loadPlugins();
 
-// Add note manager and session context to global context for renderer access
+// Initialize automation engine to register plugin commands
+automationEngine.initialize();
+
+// Add services to global context for renderer access
 global.noteManager = noteManager;
 global.sessionContext = sessionContext;
+global.workflowOrchestrator = workflowOrchestrator;
 
 let mainWindow;
 
@@ -40,17 +46,20 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 1200,
-    minHeight: 700,
+    minWidth: 1000,
+    minHeight: 600,
+    titleBarStyle: 'hiddenInset',
+    frame: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      enableRemoteModule: false,
+      preload: path.join(__dirname, 'preload.js'),
+      webSecurity: true,
+      allowRunningInsecureContent: false
     },
-    titleBarStyle: 'hiddenInset',
-    frame: false,
-    backgroundColor: '#0a0a0a',
-    show: false
+    show: false,
+    backgroundColor: '#1a1a1a'
   });
 
   mainWindow.loadFile('renderer.html');
@@ -59,20 +68,13 @@ function createWindow() {
     mainWindow.show();
   });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-  
-  // Open DevTools in development mode
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
 
-  // Initialize automation engine
-  automationEngine.initialize();
-  
-  // Store main window reference for automation engine
-  global.mainWindow = mainWindow;
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 }
 
 app.disableHardwareAcceleration();
@@ -90,151 +92,402 @@ app.on('activate', () => {
   }
 });
 
-// IPC Handlers for Command Execution
+// Enhanced IPC Handlers for Command Execution
 ipcMain.handle('execute-command', async (event, command, options = {}) => {
-  return await commandExecutor.executeCommand(command, options);
+  try {
+    // Validate and sanitize command
+    if (!command || typeof command !== 'string') {
+      throw new Error('Invalid command provided');
+    }
+
+    // Add session context
+    const context = {
+      ...options,
+      sessionId: sessionContext.getCurrentSessionId(),
+      timestamp: Date.now(),
+      workingDirectory: commandExecutor.getCurrentDirectory()
+    };
+
+    const result = await commandExecutor.execute(command, context);
+    
+    // Update session context with result
+    sessionContext.addCommandResult(command, result);
+    
+    return result;
+  } catch (error) {
+    console.error('Command execution error:', error);
+    return {
+      success: false,
+      error: error.message,
+      output: '',
+      stderr: error.message
+    };
+  }
 });
 
 ipcMain.handle('execute-sequence', async (event, commands, options = {}) => {
-  return await commandExecutor.executeSequence(commands, options);
+  try {
+    if (!Array.isArray(commands)) {
+      throw new Error('Commands must be an array');
+    }
+
+    const results = [];
+    let shouldContinue = true;
+
+    for (const command of commands) {
+      if (!shouldContinue) break;
+
+      const result = await commandExecutor.execute(command, options);
+      results.push(result);
+
+      if (!result.success && options.stopOnError !== false) {
+        shouldContinue = false;
+      }
+    }
+
+    return {
+      success: results.every(r => r.success),
+      results,
+      completedCommands: results.length
+    };
+  } catch (error) {
+    console.error('Sequence execution error:', error);
+    return {
+      success: false,
+      error: error.message,
+      results: []
+    };
+  }
 });
 
-// IPC Handlers for Directory Management
+// Directory Management
 ipcMain.handle('get-current-directory', async () => {
-  return commandExecutor.getCurrentDirectory();
+  try {
+    return {
+      success: true,
+      directory: commandExecutor.getCurrentDirectory()
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
 ipcMain.handle('change-directory', async (event, newPath) => {
-  return await commandExecutor.executeCommand(`cd ${newPath}`);
+  try {
+    const result = await commandExecutor.changeDirectory(newPath);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
-// IPC Handlers for AI Processing
+// Enhanced AI Processing
 ipcMain.handle('process-ai-query', async (event, query, options = {}) => {
   try {
-    if (options.modelName) {
-      aiService.modelName = options.modelName;
+    // Check if this is a direct command that doesn't need AI
+    if (commandExecutor.isDirectCommand(query)) {
+      const result = await commandExecutor.execute(query, options);
+      return {
+        success: true,
+        isDirect: true,
+        result
+      };
     }
-    return await automationEngine.processAutomationRequest(query, options);
+
+    // Add context to the query
+    const enhancedOptions = {
+      ...options,
+      currentDirectory: commandExecutor.getCurrentDirectory(),
+      sessionContext: sessionContext.getRecentContext(),
+      systemInfo: await getSystemInfo()
+    };
+
+    const response = await automationEngine.processQuery(query, enhancedOptions);
+    return response;
   } catch (error) {
-    console.error('Error processing AI query:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to process query with AI' 
+    console.error('AI query processing error:', error);
+    return {
+      success: false,
+      error: error.message
     };
   }
 });
 
 ipcMain.handle('parse-ai-response', async (event, response, biModalMode = false) => {
   try {
-    return responseParser.parseResponse(response, biModalMode);
+    const parsed = await responseParser.parse(response, { biModalMode });
+    return {
+      success: true,
+      parsed
+    };
   } catch (error) {
-    console.error('Error parsing AI response:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to parse AI response',
-      commandSequences: [],
-      explanation: response
+    return {
+      success: false,
+      error: error.message
     };
   }
 });
 
-// IPC Handlers for Command History
+// Command History Management
 ipcMain.handle('get-command-history', async (event, limit = 10) => {
-  return commandExecutor.getHistory(limit);
+  try {
+    const history = sessionContext.getCommandHistory(limit);
+    return {
+      success: true,
+      history
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
 ipcMain.handle('clear-command-history', async () => {
-  commandExecutor.clearHistory();
-  return { success: true };
-});
-
-// IPC Handlers for Special Operations
-ipcMain.handle('handle-special-command', async (event, command, options = {}) => {
-  const specialCommand = commandExecutor.checkForSpecialCommand(command);
-  if (specialCommand) {
-    return await commandExecutor.handleSpecialCommand(specialCommand, options);
+  try {
+    sessionContext.clearHistory();
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
   }
-  return { success: false, output: 'Not a special command' };
 });
 
-// IPC Handlers for AI Model Management
+// Special Operations
+ipcMain.handle('handle-special-command', async (event, command, options = {}) => {
+  try {
+    // Handle special commands like file operations, system commands, etc.
+    const result = await commandExecutor.handleSpecialCommand(command, options);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// AI Model Management
 ipcMain.handle('get-available-ai-models', async () => {
-  return aiService.getAvailableModels();
+  try {
+    const models = aiService.getAvailableModels();
+    return {
+      success: true,
+      models
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
 ipcMain.handle('set-ai-model', async (event, modelName) => {
   try {
-    aiService.setModel(modelName);
-    return { success: true, modelName: aiService.modelName };
+    const result = await aiService.setModel(modelName);
+    return result;
   } catch (error) {
-    console.error('Error setting AI model:', error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message
+    };
   }
 });
 
 ipcMain.handle('get-current-ai-model', async () => {
-  return aiService.modelName;
+  try {
+    const model = aiService.getCurrentModel();
+    return {
+      success: true,
+      model
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
-// IPC Handlers for System Information
+// System Information
 ipcMain.handle('get-system-info', async () => {
+  return await getSystemInfo();
+});
+
+async function getSystemInfo() {
   try {
     return {
       platform: os.platform(),
-      release: os.release(),
-      type: os.type(),
       arch: os.arch(),
-      cpus: os.cpus(),
-      totalMemory: os.totalmem(),
-      freeMemory: os.freemem(),
+      release: os.release(),
       hostname: os.hostname(),
       userInfo: os.userInfo(),
-      homedir: os.homedir()
+      cpus: os.cpus().length,
+      totalMemory: os.totalmem(),
+      freeMemory: os.freemem(),
+      uptime: os.uptime(),
+      nodeVersion: process.version,
+      electronVersion: process.versions.electron
     };
   } catch (error) {
-    console.error('Error getting system info:', error);
-    return { error: error.message };
+    return {
+      error: error.message
+    };
   }
-});
+}
 
-// IPC Handlers for Process Management
+// Process Management
 ipcMain.handle('kill-current-process', async () => {
-  const killed = commandExecutor.killCurrentProcess();
-  return { success: killed };
-});
-
-// IPC Handlers for File System Operations
-ipcMain.handle('get-file-system-info', async () => {
-  return await commandExecutor.getFileSystemInfo();
-});
-
-// IPC Handlers for UI Operations
-ipcMain.handle('select-background-image', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    filters: [
-      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
-    ]
-  });
-  
-  if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
+  try {
+    const result = await commandExecutor.killCurrentProcess();
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
   }
-  return null;
+});
+
+// File System Operations
+ipcMain.handle('get-file-system-info', async () => {
+  try {
+    const currentDir = commandExecutor.getCurrentDirectory();
+    const files = await fs.readdir(currentDir, { withFileTypes: true });
+    
+    const fileInfo = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const fullPath = path.join(currentDir, file.name);
+          const stats = await fs.stat(fullPath);
+          return {
+            name: file.name,
+            isDirectory: file.isDirectory(),
+            isFile: file.isFile(),
+            size: stats.size,
+            modified: stats.mtime,
+            permissions: stats.mode
+          };
+        } catch (error) {
+          return {
+            name: file.name,
+            error: error.message
+          };
+        }
+      })
+    );
+
+    return {
+      success: true,
+      currentDirectory: currentDir,
+      files: fileInfo
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// UI Operations
+ipcMain.handle('select-background-image', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Background Image',
+      filters: [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
+      ],
+      properties: ['openFile']
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      return {
+        success: true,
+        imagePath: result.filePaths[0]
+      };
+    }
+
+    return {
+      success: false,
+      canceled: true
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
 ipcMain.handle('minimize-window', () => {
-  mainWindow.minimize();
+  if (mainWindow) {
+    mainWindow.minimize();
+  }
 });
 
 ipcMain.handle('maximize-window', () => {
-  if (mainWindow.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow.maximize();
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
   }
 });
 
 ipcMain.handle('close-window', () => {
-  mainWindow.close();
+  if (mainWindow) {
+    mainWindow.close();
+  }
+});
+
+// Plugin Management
+ipcMain.handle('get-available-plugins', async () => {
+  try {
+    const plugins = pluginManager.getAvailablePlugins();
+    return {
+      success: true,
+      plugins
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('enable-plugin', async (event, pluginName) => {
+  try {
+    const result = await pluginManager.enablePlugin(pluginName);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('disable-plugin', async (event, pluginName) => {
+  try {
+    const result = await pluginManager.disablePlugin(pluginName);
+    return result;
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
