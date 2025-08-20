@@ -13,16 +13,18 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 
 const PluginManager = require('./plugin_manager');
+const InputValidator = require('./security/InputValidator');
 
 class CommandExecutor {
   constructor() {
     this.pluginManager = new PluginManager(this);
     this.pluginManager.loadPlugins();
+    this.inputValidator = new InputValidator();
     this.currentProcess = null;
     this.isExecuting = false;
-    this.commandHistory = global.sessionContext.get('commandHistory', []); // Load history from session context
+    this.commandHistory = global.sessionContext ? global.sessionContext.get('commandHistory', []) : []; // Load history from session context
     this.maxHistoryLength = 100;
-    this.currentDirectory = global.sessionContext.get('currentDirectory', process.cwd()); // Load current directory from session context
+    this.currentDirectory = global.sessionContext ? global.sessionContext.get('currentDirectory', process.cwd()) : process.cwd(); // Load current directory from session context
     this.specialHandlers = {
       'nano': this.handleTextEditor.bind(this),
       'vim': this.handleTextEditor.bind(this),
@@ -30,6 +32,8 @@ class CommandExecutor {
       'emacs': this.handleTextEditor.bind(this),
       'code': this.handleTextEditor.bind(this)
     };
+    this.executionTimeouts = new Map();
+    this.maxExecutionTime = 30000; // 30 seconds default timeout
   }
 
   /**
@@ -43,9 +47,28 @@ class CommandExecutor {
       return { success: false, output: 'Another command is already running' };
     }
 
-    if (this.isDangerous(command)) {
-      return { success: false, output: `Dangerous command blocked: ${command}` };
+    // Enhanced security validation
+    const validation = this.inputValidator.validateInput(command, {
+      strictMode: options.strictMode || false,
+      allowHidden: options.allowHidden || false
+    });
+
+    if (!validation.isValid) {
+      return {
+        success: false,
+        output: `Command blocked: ${validation.errors.join(', ')}`,
+        suggestions: validation.suggestions,
+        riskLevel: validation.riskLevel
+      };
     }
+
+    // Show warnings if any
+    if (validation.warnings.length > 0) {
+      console.warn('Command warnings:', validation.warnings);
+    }
+
+    // Use sanitized command
+    command = validation.sanitized;
 
     try {
       this.isExecuting = true;

@@ -4,9 +4,87 @@
  * Handles UI interactions and rendering for the AI Terminal application.
  */
 
-import Terminal from './components/Terminal.js';
-import CommandQueue from './components/CommandQueue.js';
-import Input from './components/Input.js';
+// Use dynamic imports for ES6 modules in renderer context
+let Terminal, CommandQueue, Input, ErrorBoundary, MemoryManager;
+
+// Load components dynamically
+async function loadComponents() {
+  try {
+    // Try ES6 imports first, fallback to global objects
+    if (typeof window !== 'undefined') {
+      // In browser context, components are loaded as scripts
+      Terminal = window.Terminal;
+      CommandQueue = window.CommandQueue;
+      Input = window.Input;
+      ErrorBoundary = window.ErrorBoundary;
+      MemoryManager = window.MemoryManager;
+    } else {
+      // In Node.js context, use require
+      Terminal = require('./components/Terminal.js');
+      CommandQueue = require('./components/CommandQueue.js');
+      Input = require('./components/Input.js');
+      const errorUtils = require('./utils/ErrorBoundary.js');
+      ErrorBoundary = errorUtils.ErrorBoundary;
+      MemoryManager = errorUtils.MemoryManager;
+    }
+  } catch (error) {
+    console.error('Failed to load components:', error);
+    throw error;
+  }
+}
+
+/**
+ * Show error message to user
+ */
+function showErrorMessage(message, severity = 'error') {
+  const errorContainer = document.getElementById('errorContainer') || createErrorContainer();
+  
+  const errorElement = document.createElement('div');
+  errorElement.className = `error-message error-${severity}`;
+  errorElement.innerHTML = `
+    <span class="error-icon">${getErrorIcon(severity)}</span>
+    <span class="error-text">${escapeHtml(message)}</span>
+    <button class="error-close" onclick="this.parentElement.remove()">×</button>
+  `;
+  
+  errorContainer.appendChild(errorElement);
+  
+  // Auto-remove after delay (except for critical errors)
+  if (severity !== 'critical') {
+    setTimeout(() => {
+      if (errorElement.parentNode) {
+        errorElement.remove();
+      }
+    }, 5000);
+  }
+}
+
+function createErrorContainer() {
+  const container = document.createElement('div');
+  container.id = 'errorContainer';
+  container.className = 'error-container';
+  document.body.appendChild(container);
+  return container;
+}
+
+function getErrorIcon(severity) {
+  const icons = {
+    critical: '🚨',
+    high: '❌',
+    medium: '⚠️',
+    low: 'ℹ️',
+    error: '❌',
+    warning: '⚠️',
+    info: 'ℹ️'
+  };
+  return icons[severity] || '❌';
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
 // State Management
 const state = {
@@ -27,25 +105,71 @@ let terminal;
 let commandQueue;
 let input;
 
-document.addEventListener('DOMContentLoaded', () => {
-  initializeApp();
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await loadComponents();
+    await initializeApp();
+  } catch (error) {
+    console.error('Failed to initialize app:', error);
+    showErrorMessage('Failed to load application components. Please refresh the page.');
+  }
 });
 
 async function initializeApp() {
-  terminal = new Terminal('terminalArea');
-  commandQueue = new CommandQueue('commandQueue', executeCommandSequence);
-  input = new Input('commandInput', processUserInput);
+  try {
+    // Initialize error boundary and memory manager
+    const errorBoundary = new ErrorBoundary();
+    const memoryManager = new MemoryManager();
+    
+    // Set up error handling
+    errorBoundary.onError((errorInfo) => {
+      showErrorMessage(`Error: ${errorInfo.message}`, errorInfo.severity);
+    });
+    
+    // Start memory monitoring
+    memoryManager.startMonitoring();
+    
+    // Register cleanup callbacks
+    memoryManager.registerCleanup(() => {
+      if (terminal) {
+        const stats = terminal.getStats();
+        if (stats.totalLines > 500) {
+          terminal.clear();
+          terminal.addLog('Terminal cleared due to memory optimization', 'system');
+        }
+      }
+    });
+    
+    // Initialize components with error boundaries
+    terminal = new Terminal('terminalArea');
+    commandQueue = new CommandQueue('commandQueue', executeCommandSequence);
+    input = new Input('commandInput', processUserInput);
 
-  await loadAppearanceSettings();
-  
-  state.currentDirectory = await window.electronAPI.getCurrentDirectory();
-  terminal.addLog(`Current directory: ${state.currentDirectory}`, 'system');
-  
-  setupEventListeners();
-  setupAutomationListeners();
-  
-  input.element.focus();
-  displayWelcomeMessage();
+    // Wrap critical methods with error boundaries
+    errorBoundary.wrapMethod(terminal, 'addLog', { component: 'Terminal' });
+    errorBoundary.wrapMethod(commandQueue, 'render', { component: 'CommandQueue' });
+    errorBoundary.wrapMethod(input, 'setValue', { component: 'Input' });
+
+    await loadAppearanceSettings();
+    
+    const dirResult = await window.electronAPI.getCurrentDirectory();
+    state.currentDirectory = dirResult.success ? dirResult.directory : process.cwd();
+    terminal.addLog(`Current directory: ${state.currentDirectory}`, 'system');
+    
+    setupEventListeners();
+    setupAutomationListeners();
+    
+    input.element.focus();
+    displayWelcomeMessage();
+    
+    // Store references for cleanup
+    window.errorBoundary = errorBoundary;
+    window.memoryManager = memoryManager;
+    
+  } catch (error) {
+    console.error('Failed to initialize app:', error);
+    showErrorMessage('Critical initialization error. Please refresh the page.', 'critical');
+  }
 }
 
 /**
