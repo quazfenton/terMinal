@@ -247,7 +247,7 @@ class AutomationEngine {
     const commonCommands = [
       'ls', 'cd', 'pwd', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'cat', 'grep', 'find', 'man', 'ps', 'kill', 'top', 'df', 'du', 'chmod', 'chown', 'ssh', 'scp', 'ftp', 'wget', 'curl', 'ping', 'netstat', 'ifconfig', 'ip', 'route', 'uname', 'history', 'clear', 'exit'
     ];
-    const command = input.split(' '); // Get the first word as the command
+    const command = input.split(' ')[0]; // Get the first word as the command
     return commonCommands.includes(command);
   }
 
@@ -259,8 +259,8 @@ class AutomationEngine {
    */
   async handlePackageInstall(input, rule) {
     const match = input.match(rule.pattern);
-    const packageManager = match && match ? match.toLowerCase() : '';
-    const packageName = match && match ? match : '';
+    const packageManager = match && match[1] ? match[1].toLowerCase() : '';
+    const packageName = match && match[2] ? match[2] : '';
 
     const commands = {
       npm: `npm install ${packageName}`,
@@ -290,7 +290,7 @@ class AutomationEngine {
    */
   async handleFileCreation(input, rule) {
     const match = input.match(rule.pattern);
-    const filename = match && match ? match : '';
+    const filename = match && match[1] ? match[1] : '';
     
     // Generate AI-powered file content based on filename extension
     const extension = path.extname(filename).toLowerCase();
@@ -316,7 +316,7 @@ class AutomationEngine {
    */
   async handleNavigation(input, rule) {
     const match = input.match(rule.pattern);
-    const targetDir = match && match ? match : '';
+    const targetDir = match && match[1] ? match[1] : '';
 
     return {
       success: true,
@@ -337,8 +337,8 @@ class AutomationEngine {
    */
   async handleCodeGeneration(input, rule) {
     const match = input.match(rule.pattern);
-    const language = match && match ? match.toLowerCase() : '';
-    const description = match && match ? match : '';
+    const language = match && match[1] ? match[1].toLowerCase() : '';
+    const description = match && match[2] ? match[2] : '';
     
     const filename = `script-${Date.now()}.${this.getLanguageExtension(language)}`;
     const content = await this.generateCodeContent(language, description);

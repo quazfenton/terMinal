@@ -177,10 +177,24 @@ class CommandExecutor {
 
   isDangerous(command) {
     const dangerousPatterns = [
-      /^sudo\s+rm\s+-rf\s+\//,
-      /^rm\s+-rf\s+\//,
-      />\s*\/dev\/sd/,
+      /^sudo\s+rm\s+-rf\s+\//,      // Dangerous rm -rf with sudo
+      /^rm\s+-rf\s+\//,              // Dangerous rm -rf
+      />\s*\/dev\/sd/,               // Overwriting device files
+      /.*>&\s*\/dev\/null\s*\|\s*rm.*/, // Redirect output to rm command
+      /.*\|\s*rm\s+-rf.*/,           // Piping to dangerous commands
+      /.*&&\s*rm\s+-rf.*/,           // Chaining dangerous commands
+      /.*;\s*rm\s+-rf.*/,            // Semicolon separation for dangerous commands
+      /\/\.\.\//,                    // Path traversal attempts
+      /.*\$\(.+\).*/,                // Command substitution attempts
+      /.*`.*`/,                      // Backtick command execution
+      /.*\{\s*\/.*\s*\}.*/,          // Globbing attacks
     ];
+    
+    // Also check for dangerous file paths
+    if (command.includes('../../') || command.includes('../../../')) {
+      return true;
+    }
+    
     return dangerousPatterns.some(pattern => pattern.test(command));
   }
 
@@ -499,6 +513,42 @@ class CommandExecutor {
     global.sessionContext.set('commandHistory', []);
   }
 
+  /**
+   * Check if a command is a direct shell command that doesn't need AI processing
+   * @param {string} command - The command to check
+   * @returns {boolean} True if the command can be executed directly
+   */
+  isDirectCommand(command) {
+    const directCommands = [
+      'ls', 'pwd', 'cd', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'cat', 'grep', 
+      'find', 'ps', 'kill', 'top', 'df', 'du', 'history', 'clear', 'exit', 'whoami',
+      'date', 'time', 'man', 'which', 'whereis', 'head', 'tail', 'sort', 'uniq', 'wc',
+      'chmod', 'chown', 'ln', 'alias', 'unalias', 'jobs', 'fg', 'bg', 'htop', 'free',
+      'ifconfig', 'netstat', 'ping', 'wget', 'curl', 'scp', 'ssh', 'rsync', 'tar',
+      'zip', 'unzip', 'gzip', 'gunzip', 'bzip2', 'ps', 'kill', 'killall'
+    ];
+    
+    // Split the command to get the first part
+    const commandParts = command.trim().split(/\s+/);
+    if (commandParts.length === 0) return false;
+    
+    const baseCommand = commandParts[0];
+    
+    // Check if it's a direct command
+    if (directCommands.includes(baseCommand)) {
+      return true;
+    }
+    
+    // Check for some common patterns that should be direct
+    if (baseCommand.startsWith('./') || baseCommand.includes('/') || 
+        baseCommand.startsWith('~') || baseCommand.startsWith('../') || 
+        baseCommand.startsWith('./')) {
+      return true;
+    }
+    
+    return false;
+  }
+  
   /**
    * Kill the current process if one is running
    * @returns {boolean} True if a process was killed, false otherwise

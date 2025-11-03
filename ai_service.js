@@ -70,7 +70,7 @@ class AIService {
     this.systemPrompt = this.buildSystemPrompt();
     this.biModalSystemPrompt = this.buildBiModalSystemPrompt();
     this.maxContextLength = 10;
-    this.responseParser = require('./ai_response_parser');
+    this.responseParser = new (require('./ai_response_parser'))();
   }
 
   /**

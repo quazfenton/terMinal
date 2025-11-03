@@ -6,6 +6,8 @@ class PluginManager {
     this.commandExecutor = commandExecutor;
     this.pluginsDirectory = path.join(__dirname, 'plugins');
     this.commandRegistry = []; // A simple array to hold all command objects
+    this.plugins = new Map(); // Store plugins by name
+    this.enabledPlugins = new Set(); // Track enabled plugins
   }
 
   /**
@@ -22,15 +24,21 @@ class PluginManager {
             const PluginClass = require(pluginPath);
             const pluginInstance = new PluginClass(this.commandExecutor);
             
-            if (typeof pluginInstance.getCommands === 'function') {
+            if (typeof pluginInstance.getCommands === 'function' && typeof pluginInstance.getName === 'function') {
+              const pluginName = pluginInstance.getName();
               const commands = pluginInstance.getCommands();
+              
+              // Store the plugin instance
+              this.plugins.set(pluginName, pluginInstance);
+              this.enabledPlugins.add(pluginName);
+              
               commands.forEach(cmd => {
-                // Store the regex, handler, and the plugin instance itself
+                // Store the command with the plugin instance
                 this.commandRegistry.push({ ...cmd, plugin: pluginInstance });
               });
               console.log(`Loaded plugin: ${file} with ${commands.length} commands`);
             } else {
-                console.warn(`Plugin ${file} does not have a getCommands method.`);
+                console.warn(`Plugin ${file} does not have required methods (getName, getCommands).`);
             }
           } catch (error) {
             console.error(`Failed to load plugin ${file}:`, error);
@@ -43,19 +51,21 @@ class PluginManager {
   }
 
   /**
-   * Find a command handler for the given input string.
+   * Find a plugin command for the given input string.
    * @param {string} input - The user's input string.
    * @returns {Object|null} The matched command info, or null.
    */
-  findCommandHandler(input) {
+  findPluginForCommand(input) {
     for (const cmd of this.commandRegistry) {
-      const match = input.match(cmd.command); // cmd.command is the regex
-      if (match) {
-        return {
-          handler: cmd.handler, // The function to execute
-          match: match,         // The result of the regex match
-          plugin: cmd.plugin    // The plugin instance
-        };
+      if (cmd.pattern) { // Use pattern instead of command
+        const match = input.match(cmd.pattern);
+        if (match) {
+          return {
+            command: cmd,           // The command object with execute function
+            match: match,           // The result of the regex match
+            plugin: cmd.plugin      // The plugin instance
+          };
+        }
       }
     }
     return null;
@@ -63,14 +73,14 @@ class PluginManager {
 
   /**
    * Execute a plugin command.
-   * @param {Object} commandInfo - The command info from findCommandHandler.
+   * @param {Object} commandInfo - The command info from findPluginForCommand.
    * @returns {Promise<Object>} The result of the plugin execution.
    */
   async executePluginCommand(commandInfo) {
-    const { handler, match, plugin } = commandInfo;
+    const { command, match, plugin } = commandInfo;
     try {
-      // The handler is already bound to the plugin instance
-      return await handler(match);
+      // Call the execute function instead of handler
+      return await command.execute(match);
     } catch (error) {
       console.error(`Error executing plugin command:`, error);
       return {
@@ -78,6 +88,46 @@ class PluginManager {
         output: `Plugin error: ${error.message}`,
       };
     }
+  }
+  
+  /**
+   * Get available plugins
+   */
+  getAvailablePlugins() {
+    const plugins = [];
+    for (const [name, plugin] of this.plugins) {
+      plugins.push({
+        name: name,
+        enabled: this.enabledPlugins.has(name),
+        commands: plugin.getCommands().map(cmd => ({
+          name: cmd.name || 'unnamed',
+          description: cmd.description || 'No description'
+        }))
+      });
+    }
+    return plugins;
+  }
+  
+  /**
+   * Enable a plugin
+   */
+  enablePlugin(pluginName) {
+    if (this.plugins.has(pluginName)) {
+      this.enabledPlugins.add(pluginName);
+      return { success: true, message: `Plugin ${pluginName} enabled` };
+    }
+    return { success: false, message: `Plugin ${pluginName} not found` };
+  }
+  
+  /**
+   * Disable a plugin
+   */
+  disablePlugin(pluginName) {
+    if (this.enabledPlugins.has(pluginName)) {
+      this.enabledPlugins.delete(pluginName);
+      return { success: true, message: `Plugin ${pluginName} disabled` };
+    }
+    return { success: false, message: `Plugin ${pluginName} not found or already disabled` };
   }
 }
 
