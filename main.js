@@ -18,16 +18,21 @@ const NoteManager = require('./note_manager');
 const PluginManager = require('./plugin_manager');
 const SessionContext = require('./session_context');
 const WorkflowOrchestrator = require('./workflow_orchestrator');
+const ConfigManager = require('./config/ConfigManager');
+const { ErrorBoundary, MemoryManager } = require('./utils/ErrorBoundary');
 
-// Initialize services
-const aiService = new AIService();
-const responseParser = new AIResponseParser();
-const commandExecutor = new CommandExecutor();
-const noteManager = new NoteManager();
-const pluginManager = new PluginManager(commandExecutor);
-const automationEngine = new AutomationEngine(aiService, commandExecutor);
-const sessionContext = SessionContext;
-const workflowOrchestrator = new WorkflowOrchestrator();
+// Import enhanced automation components
+const AITerminalIntegration = require('./ai_terminal_integration');
+const AdvancedAutomationArsenal = require('./advanced_automation_arsenal');
+const EnhancedAIResponseParser = require('./enhanced_ai_response_parser');
+
+// Initialize configuration and error handling
+const configManager = new ConfigManager();
+const errorBoundary = new ErrorBoundary();
+const memoryManager = new MemoryManager();
+
+// Initialize services (will be initialized after config loads)
+let aiService, responseParser, commandExecutor, noteManager, pluginManager, automationEngine, sessionContext, workflowOrchestrator;
 
 // Load plugins
 pluginManager.loadPlugins();
@@ -78,7 +83,95 @@ function createWindow() {
 }
 
 app.disableHardwareAcceleration();
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  try {
+    // Initialize configuration
+    await configManager.initialize();
+    
+    // Initialize services with configuration
+    await initializeServices();
+    
+    // Start memory monitoring
+    memoryManager.startMonitoring();
+    
+    // Create main window
+    await createWindow();
+    
+    console.log('AI Terminal initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize AI Terminal:', error);
+    errorBoundary.handleError(error, { type: 'initialization' });
+  }
+});
+
+async function initializeServices() {
+  try {
+    // Initialize services with configuration
+    const aiConfig = configManager.get('ai', {});
+    const securityConfig = configManager.get('security', {});
+    const performanceConfig = configManager.get('performance', {});
+    
+    aiService = new AIService(aiConfig);
+    responseParser = new AIResponseParser();
+    commandExecutor = new CommandExecutor();
+    noteManager = new NoteManager();
+    pluginManager = new PluginManager(commandExecutor);
+    automationEngine = new AutomationEngine(aiService, commandExecutor);
+    sessionContext = SessionContext;
+    workflowOrchestrator = new WorkflowOrchestrator(automationEngine, commandExecutor);
+    
+    // Configure services
+    if (securityConfig.maxCommandLength) {
+      commandExecutor.inputValidator.maxCommandLength = securityConfig.maxCommandLength;
+    }
+    
+    if (performanceConfig.maxHistoryLength) {
+      commandExecutor.maxHistoryLength = performanceConfig.maxHistoryLength;
+    }
+    
+    if (performanceConfig.memoryThreshold) {
+      memoryManager.setThreshold(performanceConfig.memoryThreshold);
+    }
+    
+    // Load plugins
+    await pluginManager.loadPlugins();
+    
+    // Initialize automation engine
+    await automationEngine.initialize();
+    
+    // Add services to global context for renderer access
+    global.configManager = configManager;
+    global.errorBoundary = errorBoundary;
+    global.memoryManager = memoryManager;
+    global.noteManager = noteManager;
+    global.sessionContext = sessionContext;
+    global.workflowOrchestrator = workflowOrchestrator;
+    
+    // Set up error boundaries for services
+    errorBoundary.wrapMethod(aiService, 'processQuery', { service: 'AIService' });
+    errorBoundary.wrapMethod(commandExecutor, 'executeCommand', { service: 'CommandExecutor' });
+    errorBoundary.wrapMethod(automationEngine, 'processAutomationRequest', { service: 'AutomationEngine' });
+    
+    // Register memory cleanup callbacks
+    memoryManager.registerCleanup(() => {
+      if (commandExecutor && commandExecutor.commandHistory.length > 500) {
+        commandExecutor.commandHistory = commandExecutor.commandHistory.slice(-100);
+        console.log('Command history cleaned up due to memory pressure');
+      }
+    });
+    
+    memoryManager.registerCleanup(() => {
+      if (aiService && typeof aiService.clearContext === 'function') {
+        aiService.clearContext();
+        console.log('AI service context cleared due to memory pressure');
+      }
+    });
+    
+  } catch (error) {
+    console.error('Failed to initialize services:', error);
+    throw error;
+  }
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
