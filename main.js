@@ -21,12 +21,32 @@ const WorkflowOrchestrator = require('./workflow_orchestrator');
 const ConfigManager = require('./config/ConfigManager');
 const { ErrorBoundary, MemoryManager } = require('./utils/ErrorBoundary');
 
+// Import security components
+const SecureConfig = require('./security/SecureConfig');
+const SecurityAuditLogger = require('./security/SecurityAuditLogger');
+
 // Import enhanced automation components
 const AITerminalIntegration = require('./ai_terminal_integration');
 const AdvancedAutomationArsenal = require('./advanced_automation_arsenal');
 const EnhancedAIResponseParser = require('./enhanced_ai_response_parser');
 
-// Initialize configuration and error handling
+// Import core components
+const CommandRecognizer = require('./core/CommandRecognizer');
+const ServiceContainer = require('./core/ServiceContainer');
+const StateManager = require('./state/StateManager');
+const ResponseCache = require('./cache/ResponseCache');
+const PerformanceMonitor = require('./monitoring/PerformanceMonitor');
+
+// Initialize core systems
+const serviceContainer = new ServiceContainer();
+const stateManager = new StateManager();
+const responseCache = new ResponseCache();
+const performanceMonitor = new PerformanceMonitor();
+const commandRecognizer = new CommandRecognizer();
+
+// Initialize security and configuration
+const secureConfig = new SecureConfig();
+const securityAuditLogger = new SecurityAuditLogger();
 const configManager = new ConfigManager();
 const errorBoundary = new ErrorBoundary();
 const memoryManager = new MemoryManager();
@@ -280,16 +300,33 @@ ipcMain.handle('change-directory', async (event, newPath) => {
   }
 });
 
-// Enhanced AI Processing
+// Enhanced AI Processing with Command Recognition
 ipcMain.handle('process-ai-query', async (event, query, options = {}) => {
   try {
+    const timerId = performanceMonitor.startTimer('aiQuery');
+    
     // Check if this is a direct command that doesn't need AI
-    if (commandExecutor.isDirectCommand(query)) {
-      const result = await commandExecutor.execute(query, options);
+    if (commandRecognizer.isDirectCommand(query)) {
+      const result = await commandExecutor.executeDirectly(query, options);
+      performanceMonitor.endTimer(timerId);
+      
       return {
         success: true,
         isDirect: true,
         result
+      };
+    }
+
+    // Check cache first
+    const cacheKey = { query, options };
+    const cachedResponse = responseCache.get(query, cacheKey);
+    
+    if (cachedResponse) {
+      performanceMonitor.endTimer(timerId);
+      return {
+        success: true,
+        cached: true,
+        ...cachedResponse
       };
     }
 
@@ -302,6 +339,13 @@ ipcMain.handle('process-ai-query', async (event, query, options = {}) => {
     };
 
     const response = await automationEngine.processQuery(query, enhancedOptions);
+    
+    // Cache successful responses
+    if (response.success) {
+      responseCache.set(query, response, cacheKey);
+    }
+    
+    performanceMonitor.endTimer(timerId);
     return response;
   } catch (error) {
     console.error('AI query processing error:', error);

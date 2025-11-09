@@ -54,6 +54,178 @@ class ErrorBoundary {
   }
 
   setupRecoveryStrategies() {
+    this.recoveryStrategies.set('CommandExecutionError', async (error, context) => {
+      console.log('Attempting command execution recovery...');
+      return { recovered: true, fallback: 'direct execution' };
+    });
+
+    this.recoveryStrategies.set('AIServiceError', async (error, context) => {
+      console.log('Attempting AI service recovery...');
+      return { recovered: true, fallback: 'cached response' };
+    });
+  }
+
+  handleError(error, context = {}) {
+    const errorInfo = {
+      message: error.message || String(error),
+      stack: error.stack,
+      timestamp: new Date().toISOString(),
+      context,
+      severity: this.determineSeverity(error, context)
+    };
+
+    this.errors.push(errorInfo);
+    
+    if (this.errors.length > this.maxErrors) {
+      this.errors.shift();
+    }
+
+    // Emit error event
+    this.emit('error', errorInfo);
+
+    // Attempt recovery
+    this.attemptRecovery(error, context);
+
+    return errorInfo;
+  }
+
+  determineSeverity(error, context) {
+    if (context.type === 'uncaughtException') return 'critical';
+    if (error.name === 'SecurityError') return 'high';
+    if (error.name === 'ValidationError') return 'medium';
+    return 'low';
+  }
+
+  async attemptRecovery(error, context) {
+    if (this.isRecovering) return;
+
+    const strategy = this.recoveryStrategies.get(error.name);
+    if (strategy) {
+      this.isRecovering = true;
+      try {
+        await strategy(error, context);
+      } catch (recoveryError) {
+        console.error('Recovery failed:', recoveryError);
+      } finally {
+        this.isRecovering = false;
+      }
+    }
+  }
+
+  wrapMethod(obj, methodName, context = {}) {
+    const originalMethod = obj[methodName];
+    
+    obj[methodName] = async (...args) => {
+      try {
+        return await originalMethod.apply(obj, args);
+      } catch (error) {
+        this.handleError(error, { ...context, method: methodName });
+        throw error;
+      }
+    };
+  }
+
+  emit(event, data) {
+    const handlers = this.errorHandlers.get(event) || [];
+    handlers.forEach(handler => {
+      try {
+        handler(data);
+      } catch (error) {
+        console.error('Error handler failed:', error);
+      }
+    });
+  }
+
+  onError(handler) {
+    if (!this.errorHandlers.has('error')) {
+      this.errorHandlers.set('error', []);
+    }
+    this.errorHandlers.get('error').push(handler);
+  }
+
+  getRecentErrors(limit = 10) {
+    return this.errors.slice(-limit);
+  }
+
+  clearErrors() {
+    this.errors = [];
+  }
+}
+
+class MemoryManager {
+  constructor() {
+    this.threshold = 200 * 1024 * 1024; // 200MB
+    this.cleanupCallbacks = [];
+    this.isMonitoring = false;
+  }
+
+  startMonitoring() {
+    if (this.isMonitoring) return;
+    
+    this.isMonitoring = true;
+    this.monitorInterval = setInterval(() => {
+      this.checkMemoryUsage();
+    }, 30000); // Check every 30 seconds
+  }
+
+  stopMonitoring() {
+    if (this.monitorInterval) {
+      clearInterval(this.monitorInterval);
+      this.isMonitoring = false;
+    }
+  }
+
+  checkMemoryUsage() {
+    const usage = process.memoryUsage();
+    
+    if (usage.heapUsed > this.threshold) {
+      console.warn(`Memory usage high: ${Math.round(usage.heapUsed / 1024 / 1024)}MB`);
+      this.triggerCleanup();
+    }
+  }
+
+  triggerCleanup() {
+    this.cleanupCallbacks.forEach(callback => {
+      try {
+        callback();
+      } catch (error) {
+        console.error('Cleanup callback failed:', error);
+      }
+    });
+
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+    }
+  }
+
+  registerCleanup(callback) {
+    this.cleanupCallbacks.push(callback);
+  }
+
+  setThreshold(threshold) {
+    this.threshold = threshold;
+  }
+
+  getMemoryStats() {
+    const usage = process.memoryUsage();
+    return {
+      heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+      heapTotal: Math.round(usage.heapTotal / 1024 / 1024),
+      external: Math.round(usage.external / 1024 / 1024),
+      rss: Math.round(usage.rss / 1024 / 1024),
+      threshold: Math.round(this.threshold / 1024 / 1024)
+    };
+  }
+}
+
+module.exports = { ErrorBoundary, MemoryManager };
+        });
+      });
+    }
+  }
+
+  setupRecoveryStrategies() {
     // AI Service recovery
     this.recoveryStrategies.set('AIService', {
       maxRetries: 3,

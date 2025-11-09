@@ -13,6 +13,7 @@ const execAsync = promisify(exec);
 const fs = require('fs').promises;
 const path = require('path');
 const sessionContext = require('./session_context');
+const SecureConfig = require('./security/SecureConfig');
 
 // Custom Error Classes
 class AIError extends Error {
@@ -39,23 +40,25 @@ class AIConnectionError extends AIError {
 
 class AIService {
   constructor(config = {}) {
+    this.secureConfig = new SecureConfig();
+    
     this.apiProviders = {
       gemini: {
-        apiKey: process.env.GEMINI_API_KEY,
+        getApiKey: () => this.secureConfig.get('GEMINI_API_KEY'),
         endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
         models: {
           'Gemini 1.5 Flash': 'gemini-1.5-flash',
         },
       },
       claude: {
-        apiKey: process.env.CLAUDE_API_KEY,
+        getApiKey: () => this.secureConfig.get('CLAUDE_API_KEY'),
         endpoint: 'https://api.anthropic.com/v1/messages',
         models: {
           'Claude 3 Sonnet': 'claude-3-sonnet-20240229',
         },
       },
       openai: {
-        apiKey: process.env.OPENAI_API_KEY,
+        getApiKey: () => this.secureConfig.get('OPENAI_API_KEY'),
         endpoint: 'https://api.openai.com/v1/chat/completions',
         models: {
           'GPT-4': 'gpt-4',
@@ -71,6 +74,49 @@ class AIService {
     this.biModalSystemPrompt = this.buildBiModalSystemPrompt();
     this.maxContextLength = 10;
     this.responseParser = new (require('./ai_response_parser'))();
+    
+    // Rate limiting
+    this.rateLimiter = new Map();
+    this.rateLimit = parseInt(this.secureConfig.get('API_RATE_LIMIT', '60'));
+    this.rateWindow = parseInt(this.secureConfig.get('API_RATE_WINDOW', '60000'));
+  }
+
+  async validateApiKeys() {
+    const results = {};
+    
+    for (const [provider, config] of Object.entries(this.apiProviders)) {
+      const apiKey = config.getApiKey();
+      results[provider] = {
+        configured: !!apiKey,
+        valid: apiKey ? this.secureConfig.validateApiKey(apiKey) : false
+      };
+    }
+    
+    return results;
+  }
+
+  async rotateApiKey(provider) {
+    return await this.secureConfig.rotateApiKey(provider);
+  }
+
+  checkRateLimit(provider) {
+    const now = Date.now();
+    const key = `${provider}_${Math.floor(now / this.rateWindow)}`;
+    const count = this.rateLimiter.get(key) || 0;
+    
+    if (count >= this.rateLimit) {
+      throw new AIError(`Rate limit exceeded for ${provider}. Try again later.`);
+    }
+    
+    this.rateLimiter.set(key, count + 1);
+    
+    // Cleanup old entries
+    for (const [k, v] of this.rateLimiter.entries()) {
+      if (k.split('_')[1] < Math.floor((now - this.rateWindow) / this.rateWindow)) {
+        this.rateLimiter.delete(k);
+      }
+    }
+  }
   }
 
   /**
@@ -358,6 +404,15 @@ Remember to respond with properly formatted JSON containing command sequences as
       throw new AIError(`Unsupported model: ${this.modelName}`);
     }
 
+    // Check rate limiting
+    this.checkRateLimit(provider.name);
+
+    // Validate API key
+    const apiKey = provider.getApiKey();
+    if (!apiKey || !this.secureConfig.validateApiKey(apiKey)) {
+      throw new AIError(`Invalid or missing API key for ${provider.name}`);
+    }
+
     try {
       const response = await this[`_call${provider.name.charAt(0).toUpperCase() + provider.name.slice(1)}`](
         systemPrompt,
@@ -383,7 +438,8 @@ Remember to respond with properly formatted JSON containing command sequences as
 
   async _callClaude(systemPrompt, userMessage, conversationHistory) {
     const provider = this.apiProviders.claude;
-    if (!provider.apiKey) throw new AIError('Claude API key is not set.');
+    const apiKey = provider.getApiKey();
+    if (!apiKey) throw new AIError('Claude API key is not configured.');
 
     const messages = [...conversationHistory, { role: 'user', content: userMessage }];
     const response = await axios.post(
@@ -397,7 +453,72 @@ Remember to respond with properly formatted JSON containing command sequences as
       },
       {
         headers: {
-          'x-api-key': provider.apiKey,
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000
+      }
+    );
+    return response.data;
+  }
+
+  async _callOpenai(systemPrompt, userMessage, conversationHistory) {
+    const provider = this.apiProviders.openai;
+    const apiKey = provider.getApiKey();
+    if (!apiKey) throw new AIError('OpenAI API key is not configured.');
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...conversationHistory,
+      { role: 'user', content: userMessage },
+    ];
+    const response = await axios.post(
+      provider.endpoint,
+      {
+        model: this.modelName,
+        messages,
+        temperature: this.temperature,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000
+      }
+    );
+    return response.data;
+  }
+
+  async _callGemini(systemPrompt, userMessage, conversationHistory) {
+    const provider = this.apiProviders.gemini;
+    const apiKey = provider.getApiKey();
+    if (!apiKey) throw new AIError('Gemini API key is not configured.');
+
+    const contents = [
+      { role: 'user', parts: [{ text: systemPrompt }] },
+      { role: 'model', parts: [{ text: 'Okay, I understand.' }] },
+      ...conversationHistory.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }],
+      })),
+      { role: 'user', parts: [{ text: userMessage }] },
+    ];
+
+    const response = await axios.post(
+      `${provider.endpoint}/${this.modelName}:generateContent`,
+      { contents },
+      {
+        headers: {
+          'x-goog-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000
+      }
+    );
+    return response.data;
+  }
           'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json',
         },

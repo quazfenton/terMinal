@@ -14,17 +14,19 @@ const execPromise = util.promisify(exec);
 
 const PluginManager = require('./plugin_manager');
 const InputValidator = require('./security/InputValidator');
+const CommandRecognizer = require('./core/CommandRecognizer');
 
 class CommandExecutor {
   constructor() {
     this.pluginManager = new PluginManager(this);
     this.pluginManager.loadPlugins();
     this.inputValidator = new InputValidator();
+    this.commandRecognizer = new CommandRecognizer();
     this.currentProcess = null;
     this.isExecuting = false;
-    this.commandHistory = global.sessionContext ? global.sessionContext.get('commandHistory', []) : []; // Load history from session context
+    this.commandHistory = global.sessionContext ? global.sessionContext.get('commandHistory', []) : [];
     this.maxHistoryLength = 100;
-    this.currentDirectory = global.sessionContext ? global.sessionContext.get('currentDirectory', process.cwd()) : process.cwd(); // Load current directory from session context
+    this.currentDirectory = global.sessionContext ? global.sessionContext.get('currentDirectory', process.cwd()) : process.cwd();
     this.specialHandlers = {
       'nano': this.handleTextEditor.bind(this),
       'vim': this.handleTextEditor.bind(this),
@@ -33,7 +35,39 @@ class CommandExecutor {
       'code': this.handleTextEditor.bind(this)
     };
     this.executionTimeouts = new Map();
-    this.maxExecutionTime = 30000; // 30 seconds default timeout
+    this.maxExecutionTime = 30000;
+  }
+
+  /**
+   * Check if command can be executed directly without AI
+   */
+  isDirectCommand(input) {
+    return this.commandRecognizer.isDirectCommand(input);
+  }
+
+  /**
+   * Execute command directly without AI processing
+   */
+  async executeDirectly(command, options = {}) {
+    // Still validate for security
+    const validation = this.inputValidator.validateInput(command, options);
+    
+    if (!validation.isValid) {
+      return {
+        success: false,
+        output: `Command blocked: ${validation.errors.join(', ')}`,
+        riskLevel: validation.riskLevel,
+        isDirect: true
+      };
+    }
+
+    const result = await this.executeCommand(validation.sanitized, { 
+      ...options, 
+      skipAI: true 
+    });
+    
+    result.isDirect = true;
+    return result;
   }
 
   /**
@@ -53,12 +87,16 @@ class CommandExecutor {
       allowHidden: options.allowHidden || false
     });
 
+    // Log security event
+    await this.inputValidator.logSecurityEvent(command, validation, 'execute');
+
     if (!validation.isValid) {
       return {
         success: false,
         output: `Command blocked: ${validation.errors.join(', ')}`,
         suggestions: validation.suggestions,
-        riskLevel: validation.riskLevel
+        riskLevel: validation.riskLevel,
+        blocked: validation.blocked
       };
     }
 
@@ -67,8 +105,8 @@ class CommandExecutor {
       console.warn('Command warnings:', validation.warnings);
     }
 
-    // Use sanitized command
-    command = validation.sanitized;
+    // Use sanitized and sandboxed command
+    command = this.inputValidator.createSandboxedCommand(validation.sanitized);
 
     try {
       this.isExecuting = true;
@@ -143,22 +181,40 @@ class CommandExecutor {
   }
 
   /**
-   * Execute a shell command
+   * Execute a shell command securely
    * @param {string} command - The shell command to execute
    * @returns {Promise<Object>} Execution result
    */
   executeShellCommand(command) {
     return new Promise((resolve) => {
-      // Split command into parts for safer execution
-      const parts = command.split(' ');
-      const cmd = parts[0];
-      const args = parts.slice(1);
+      // Parse command safely - never use shell: true
+      const parts = this.parseCommand(command);
+      const cmd = parts.command;
+      const args = parts.args;
+      const options = parts.options;
       
+      // Set execution timeout
+      const timeout = setTimeout(() => {
+        if (child && !child.killed) {
+          child.kill('SIGTERM');
+          resolve({
+            success: false,
+            output: '',
+            stderr: 'Command timed out',
+            error: 'Command execution timeout'
+          });
+        }
+      }, this.inputValidator.securityConfig.commandTimeout);
+
       const child = spawn(cmd, args, {
         cwd: this.currentDirectory,
-        shell: false  // Avoid shell injection
+        shell: false,  // NEVER use shell: true
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: this.createSecureEnvironment(),
+        ...options
       });
       
+      this.currentProcess = child;
       let stdout = '';
       let stderr = '';
       
@@ -171,23 +227,22 @@ class CommandExecutor {
       });
       
       child.on('close', (code) => {
-        if (code === 0) {
-          resolve({
-            success: true,
-            output: stdout,
-            stderr: stderr
-          });
-        } else {
-          resolve({
-            success: false,
-            output: stdout,
-            stderr: stderr,
-            error: `Process exited with code ${code}`
-          });
-        }
+        clearTimeout(timeout);
+        this.currentProcess = null;
+        
+        resolve({
+          success: code === 0,
+          output: stdout,
+          stderr: stderr,
+          exitCode: code,
+          error: code !== 0 ? `Process exited with code ${code}` : null
+        });
       });
       
       child.on('error', (error) => {
+        clearTimeout(timeout);
+        this.currentProcess = null;
+        
         resolve({
           success: false,
           output: '',
@@ -196,6 +251,48 @@ class CommandExecutor {
         });
       });
     });
+  }
+
+  /**
+   * Parse command into safe components
+   */
+  parseCommand(command) {
+    // Remove sandbox prefix if present
+    const cleanCommand = command.replace(/^(timeout|nice|ionice)\s+[^\s]+\s*/g, '');
+    
+    // Split command safely
+    const parts = cleanCommand.trim().split(/\s+/);
+    const cmd = parts[0];
+    const args = parts.slice(1);
+    
+    return {
+      command: cmd,
+      args: args,
+      options: {
+        detached: false,
+        windowsHide: true
+      }
+    };
+  }
+
+  /**
+   * Create secure environment for command execution
+   */
+  createSecureEnvironment() {
+    const secureEnv = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      USER: process.env.USER,
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      TERM: 'xterm-256color'
+    };
+
+    // Remove potentially dangerous environment variables
+    delete secureEnv.LD_PRELOAD;
+    delete secureEnv.LD_LIBRARY_PATH;
+    delete secureEnv.DYLD_INSERT_LIBRARIES;
+    
+    return secureEnv;
   }
 
   isDangerous(command) {
@@ -222,18 +319,25 @@ class CommandExecutor {
   }
 
   async handleSudo(command, options) {
-    // In a real application, this would involve a secure password prompt.
-    // For now, we'll simulate it.
-    if (!options.sudoPassword) {
-      return {
-        success: false,
-        output: 'Sudo password required',
-        needsSudo: true,
-      };
-    }
-    const commandWithoutSudo = command.replace(/^sudo\s+/, '');
-    const echoPassword = `echo ${options.sudoPassword} | sudo -S ${commandWithoutSudo}`;
-    return this.executeShellCommand(echoPassword);
+    // Secure sudo handling - never accept plaintext passwords
+    return {
+      success: false,
+      output: 'Sudo commands require system authentication dialog',
+      requiresSystemAuth: true,
+      error: 'Use system sudo authentication instead of plaintext passwords'
+    };
+  }
+
+  /**
+   * Execute command with real-time output (REMOVED for security)
+   * This method has been disabled due to security vulnerabilities
+   */
+  executeShellCommandWithStreaming(command, outputCallback) {
+    return Promise.resolve({
+      success: false,
+      output: 'Streaming execution disabled for security',
+      error: 'Use standard execution method instead'
+    });
   }
 
   formatOutput(output, options) {

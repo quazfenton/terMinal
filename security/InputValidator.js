@@ -1,53 +1,231 @@
 /**
- * Input Validator
+ * Enhanced Input Validator with Command Sandboxing
  * 
- * Comprehensive input validation and sanitization for security hardening.
- * Prevents command injection, path traversal, and other security vulnerabilities.
+ * Comprehensive security validation, command sandboxing, and threat detection.
  */
+
+const SecureConfig = require('./SecureConfig');
 
 class InputValidator {
   constructor() {
-    this.dangerousPatterns = [
-      // Command injection patterns
+    this.secureConfig = new SecureConfig();
+    this.securityConfig = this.secureConfig.getSecurityConfig();
+    
+    // Command injection patterns
+    this.injectionPatterns = [
       /[;&|`$(){}[\]]/,
       /\$\([^)]*\)/,
       /`[^`]*`/,
-      /\|\s*sh\s*$/,
-      /\|\s*bash\s*$/,
-      /\|\s*zsh\s*$/,
-      
-      // Dangerous commands
-      /^sudo\s+rm\s+-rf\s+\//,
-      /^rm\s+-rf\s+\//,
-      /^format\s/i,
-      /^mkfs\s/,
-      /^dd\s+if=.*of=\/dev/,
-      />\s*\/dev\/sd/,
-      /chmod\s+777\s+\//,
-      /chown\s+.*root/,
-      
-      // Network and system access
-      /curl\s+.*\|\s*sh/,
-      /wget\s+.*\|\s*sh/,
+      /\|\s*(sh|bash|zsh|cmd|powershell)\s*$/i,
+      /&&|\|\||;;/,
+      />\s*\/dev\/(sd|hd)/,
+      /<<\s*EOF/,
+      /\\\s*$/m
+    ];
+    
+    // Dangerous commands (complete blocking)
+    this.blockedCommands = [
+      /^(sudo\s+)?rm\s+-rf\s+\//,
+      /^(sudo\s+)?format\s/i,
+      /^(sudo\s+)?mkfs\s/,
+      /^(sudo\s+)?dd\s+if=.*of=\/dev/,
+      /^(sudo\s+)?fdisk\s/,
+      /^(sudo\s+)?parted\s/,
+      /^(sudo\s+)?mount\s.*\/dev/,
+      /^(sudo\s+)?umount\s/,
+      /^(sudo\s+)?shutdown\s/,
+      /^(sudo\s+)?reboot\s/,
+      /^(sudo\s+)?halt\s/,
+      /^(sudo\s+)?init\s+[06]/
+    ];
+    
+    // Network security patterns
+    this.networkPatterns = [
+      /curl\s+.*\|\s*(sh|bash)/,
+      /wget\s+.*\|\s*(sh|bash)/,
       /nc\s+-l/,
       /netcat\s+-l/,
-      
-      // Code execution
-      /eval\s*\(/,
-      /exec\s*\(/,
-      /system\s*\(/,
-      /popen\s*\(/,
-      
-      // File system manipulation
-      /\/etc\/passwd/,
-      /\/etc\/shadow/,
-      /\/proc\/self/,
-      /\/dev\/null/,
-      
-      // Environment manipulation
-      /export\s+PATH=/,
-      /unset\s+PATH/,
-      /alias\s+/
+      /nmap\s/,
+      /telnet\s/,
+      /ssh\s.*@/,
+      /scp\s/,
+      /rsync\s/
+    ];
+    
+    // System file access patterns
+    this.systemFilePatterns = [
+      /\/etc\/(passwd|shadow|sudoers|hosts)/,
+      /\/proc\/(self|[0-9]+)\/(mem|maps)/,
+      /\/sys\/(class|devices)/,
+      /\/dev\/(random|urandom|zero)/,
+      /\/boot\//,
+      /\/root\//
+    ];
+    
+    // Allowed commands whitelist
+    this.allowedCommands = new Set([
+      'ls', 'dir', 'pwd', 'cd', 'cat', 'head', 'tail', 'grep', 'find',
+      'echo', 'printf', 'date', 'whoami', 'id', 'ps', 'top', 'df', 'du',
+      'mkdir', 'touch', 'cp', 'mv', 'chmod', 'chown', 'ln',
+      'git', 'npm', 'node', 'python', 'python3', 'pip', 'pip3',
+      'java', 'javac', 'gcc', 'make', 'cmake',
+      'vim', 'nano', 'emacs', 'code'
+    ]);
+  }
+
+  validateInput(input, options = {}) {
+    const result = {
+      isValid: false,
+      sanitized: '',
+      errors: [],
+      warnings: [],
+      riskLevel: 'low',
+      suggestions: [],
+      blocked: false
+    };
+
+    if (!input || typeof input !== 'string') {
+      result.errors.push('Invalid input type');
+      return result;
+    }
+
+    // Length validation
+    if (input.length > this.securityConfig.maxCommandLength) {
+      result.errors.push(`Command too long (max: ${this.securityConfig.maxCommandLength})`);
+      return result;
+    }
+
+    // Sanitize input
+    result.sanitized = this.sanitizeInput(input);
+
+    // Check for blocked commands
+    if (this.isBlockedCommand(result.sanitized)) {
+      result.blocked = true;
+      result.riskLevel = 'critical';
+      result.errors.push('Command is blocked for security reasons');
+      return result;
+    }
+
+    // Check for command injection
+    if (this.hasInjectionPattern(result.sanitized)) {
+      result.riskLevel = 'high';
+      result.errors.push('Potential command injection detected');
+      return result;
+    }
+
+    // Check network commands
+    if (!this.securityConfig.allowNetworkCommands && this.hasNetworkPattern(result.sanitized)) {
+      result.riskLevel = 'medium';
+      result.errors.push('Network commands are disabled');
+      return result;
+    }
+
+    // Check system file access
+    if (this.hasSystemFileAccess(result.sanitized)) {
+      result.riskLevel = 'high';
+      result.errors.push('System file access detected');
+      return result;
+    }
+
+    // Check sudo usage
+    if (result.sanitized.startsWith('sudo') && !this.securityConfig.allowSudo) {
+      result.riskLevel = 'high';
+      result.errors.push('Sudo commands are disabled');
+      return result;
+    }
+
+    // Validate against whitelist in strict mode
+    if (this.securityConfig.sandboxMode && !this.isWhitelistedCommand(result.sanitized)) {
+      result.riskLevel = 'medium';
+      result.warnings.push('Command not in whitelist');
+      result.suggestions.push('Use approved commands only in sandbox mode');
+    }
+
+    // Check restricted paths
+    if (this.accessesRestrictedPath(result.sanitized)) {
+      result.riskLevel = 'high';
+      result.errors.push('Access to restricted path detected');
+      return result;
+    }
+
+    result.isValid = result.errors.length === 0;
+    return result;
+  }
+
+  sanitizeInput(input) {
+    return input
+      .trim()
+      .replace(/\s+/g, ' ')  // Normalize whitespace
+      .replace(/[^\x20-\x7E]/g, '');  // Remove non-printable chars
+  }
+
+  isBlockedCommand(command) {
+    return this.blockedCommands.some(pattern => pattern.test(command));
+  }
+
+  hasInjectionPattern(command) {
+    return this.injectionPatterns.some(pattern => pattern.test(command));
+  }
+
+  hasNetworkPattern(command) {
+    return this.networkPatterns.some(pattern => pattern.test(command));
+  }
+
+  hasSystemFileAccess(command) {
+    return this.systemFilePatterns.some(pattern => pattern.test(command));
+  }
+
+  isWhitelistedCommand(command) {
+    const baseCommand = command.split(' ')[0];
+    return this.allowedCommands.has(baseCommand);
+  }
+
+  accessesRestrictedPath(command) {
+    const restrictedPaths = this.securityConfig.restrictedPaths;
+    return restrictedPaths.some(path => command.includes(path));
+  }
+
+  validateSudoRequest(password, command) {
+    if (!this.securityConfig.allowSudo) {
+      return {
+        isValid: false,
+        error: 'Sudo access is disabled'
+      };
+    }
+
+    // Never store or validate actual passwords in plaintext
+    return {
+      isValid: false,
+      error: 'Sudo authentication must use secure system prompts'
+    };
+  }
+
+  generateSecurityReport(command, validationResult) {
+    return {
+      timestamp: new Date().toISOString(),
+      command: command.substring(0, 100), // Truncate for logging
+      riskLevel: validationResult.riskLevel,
+      blocked: validationResult.blocked,
+      errors: validationResult.errors,
+      warnings: validationResult.warnings,
+      userAgent: process.env.USER || 'unknown',
+      pid: process.pid
+    };
+  }
+
+  async logSecurityEvent(command, validationResult, action = 'validate') {
+    if (!this.secureConfig.get('AUDIT_LOG_ENABLED', 'true')) {
+      return;
+    }
+
+    const report = this.generateSecurityReport(command, validationResult);
+    
+    // In production, this would write to secure audit log
+    console.log(`[SECURITY] ${action.toUpperCase()}:`, JSON.stringify(report));
+  }
+}
+
+module.exports = InputValidator;
     ];
     
     this.pathTraversalPatterns = [
